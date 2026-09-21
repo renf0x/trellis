@@ -1,0 +1,16 @@
+{
+  "id": "overview",
+  "title": "Обзор",
+  "version": "0.1.0",
+  "description": "Состояние рабочей области и реестра модулей.",
+  "icon": "LayoutDashboard",
+  "slots": [
+    {
+      "slot": "sidebar",
+      "section": "work",
+      "order": 0
+    }
+  ],
+  "permissions": [],
+  "ui": "ui/index.tsx"
+}

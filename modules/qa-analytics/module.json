@@ -1,0 +1,18 @@
+{
+  "id": "qa-analytics",
+  "title": "Качество тестов",
+  "version": "0.1.0",
+  "description": "Покрытие требований, устаревшие и дублирующиеся кейсы, flaky-прогоны.",
+  "icon": "ShieldCheck",
+  "stage": 7,
+  "slots": [
+    {
+      "slot": "sidebar",
+      "section": "analytics",
+      "order": 20
+    }
+  ],
+  "permissions": [
+    "sources:read"
+  ]
+}

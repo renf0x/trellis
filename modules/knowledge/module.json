@@ -1,0 +1,18 @@
+{
+  "id": "knowledge",
+  "title": "База знаний",
+  "version": "0.1.0",
+  "description": "Знания агента (KNW-*) и вердикты по находкам.",
+  "icon": "BookOpen",
+  "stage": 5,
+  "slots": [
+    {
+      "slot": "sidebar",
+      "section": "memory",
+      "order": 10
+    }
+  ],
+  "permissions": [
+    "arbor:read"
+  ]
+}

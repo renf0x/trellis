@@ -1,0 +1,14 @@
+{
+  "name": "@trellis/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Immutable Trellis core: module manifests, registry, slots, event bus, LLM provider contract",
+  "exports": {
+    ".": "./src/index.ts",
+    "./node": "./src/node.ts"
+  },
+  "scripts": {
+    "test": "node --import tsx --test src/*.test.ts"
+  }
+}

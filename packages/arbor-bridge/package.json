@@ -1,0 +1,13 @@
+{
+  "name": "@trellis/arbor-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Thin typed wrapper over the arbor.py memory CLI (--json, --input-json)",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --import tsx --test src/*.test.ts"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "@trellis/llm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "LLM providers (OpenRouter, ChatGPT subscription via Codex OAuth) and the token ledger",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --import tsx --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@trellis/core": "*"
+  }
+}

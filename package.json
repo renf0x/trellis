@@ -1,0 +1,26 @@
+{
+  "name": "trellis",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Trellis: QA workspace that reconciles documentation and test cases with an AI agent and Arbor memory",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c blue,magenta \"npm run dev -w @trellis/server\" \"npm run dev -w @trellis/web\"",
+    "build": "npm run build -w @trellis/web",
+    "typecheck": "tsc -p packages/core && tsc -p packages/arbor-bridge && tsc -p packages/llm && tsc -p apps/server && tsc -p apps/web",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "concurrently": "^9.1.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

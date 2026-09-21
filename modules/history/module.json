@@ -1,0 +1,18 @@
+{
+  "id": "history",
+  "title": "История изменений",
+  "version": "0.1.0",
+  "description": "Изменения документов и кейсов (CHG-*), срок хранения.",
+  "icon": "History",
+  "stage": 8,
+  "slots": [
+    {
+      "slot": "sidebar",
+      "section": "memory",
+      "order": 20
+    }
+  ],
+  "permissions": [
+    "arbor:read"
+  ]
+}

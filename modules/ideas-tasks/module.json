@@ -1,0 +1,14 @@
+{
+  "id": "ideas-tasks",
+  "title": "Идеи и задачи",
+  "version": "0.1.0",
+  "description": "Идеи и задачи по доработке Trellis. Хранятся в Arbor как записи IDEA-*.",
+  "icon": "Lightbulb",
+  "slots": [
+    { "slot": "sidebar", "section": "dev", "order": 20 },
+    { "slot": "right-panel", "section": ["work", "dev"], "order": 50 }
+  ],
+  "permissions": ["arbor:read", "arbor:write"],
+  "server": "server/index.ts",
+  "ui": "ui/index.tsx"
+}

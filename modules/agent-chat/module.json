@@ -1,0 +1,20 @@
+{
+  "id": "agent-chat",
+  "title": "AI QA агент",
+  "version": "0.1.0",
+  "description": "Основной чат агента по документации и кейсам с лентой действий.",
+  "icon": "Bot",
+  "slots": [
+    {
+      "slot": "right-panel",
+      "section": "work",
+      "order": 10
+    }
+  ],
+  "permissions": [
+    "llm:main",
+    "sources:read",
+    "arbor:write"
+  ],
+  "ui": "ui/index.tsx"
+}

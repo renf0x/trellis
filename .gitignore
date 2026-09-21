@@ -1,0 +1,21 @@
+.arbor/
+.ctx/
+.claude/settings.local.json
+__pycache__/
+node_modules/
+dist/
+build/
+coverage/
+.env
+.env.*
+data/
+
+# Claude and Context Arbor files stay local (owner's git rules)
+.claude/
+CLAUDE.md
+AGENTS.md
+AGENT_CONTEXT.md
+arbor.py
+memory/
+tests/
+*.tsbuildinfo

@@ -1,0 +1,18 @@
+{
+  "id": "testcases-view",
+  "title": "Тест-кейсы",
+  "version": "0.1.0",
+  "description": "Тест-кейсы из Azure Test Plans и CSV: таблица, фильтры, статусы.",
+  "icon": "ListChecks",
+  "stage": 3,
+  "slots": [
+    {
+      "slot": "sidebar",
+      "section": "work",
+      "order": 20
+    }
+  ],
+  "permissions": [
+    "sources:read"
+  ]
+}

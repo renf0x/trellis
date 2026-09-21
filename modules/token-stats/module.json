@@ -1,0 +1,16 @@
+{
+  "id": "token-stats",
+  "title": "Использование токенов",
+  "version": "0.1.0",
+  "description": "Затраты по чатам и моделям: OpenRouter free, OpenRouter платные и подписка ChatGPT отдельно.",
+  "icon": "Coins",
+  "slots": [
+    {
+      "slot": "sidebar",
+      "section": "analytics",
+      "order": 10
+    }
+  ],
+  "permissions": [],
+  "ui": "ui/index.tsx"
+}

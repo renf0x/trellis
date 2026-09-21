@@ -1,0 +1,24 @@
+{
+  "id": "dev-chat",
+  "title": "Чат по доработкам",
+  "version": "0.1.0",
+  "description": "Отдельный чат о доработке самого Trellis, со своим провайдером и корзиной затрат.",
+  "icon": "MessagesSquare",
+  "slots": [
+    {
+      "slot": "sidebar",
+      "section": "dev",
+      "order": 10
+    },
+    {
+      "slot": "right-panel",
+      "section": "dev",
+      "order": 10
+    }
+  ],
+  "permissions": [
+    "llm:dev",
+    "arbor:write"
+  ],
+  "ui": "ui/index.tsx"
+}

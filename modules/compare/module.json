@@ -1,0 +1,20 @@
+{
+  "id": "compare",
+  "title": "Сравнение и анализ",
+  "version": "0.1.0",
+  "description": "Сопоставление шагов кейсов с требованиями, находки и предложения правок.",
+  "icon": "GitCompare",
+  "stage": 4,
+  "slots": [
+    {
+      "slot": "sidebar",
+      "section": "work",
+      "order": 30
+    }
+  ],
+  "permissions": [
+    "sources:read",
+    "llm:main",
+    "arbor:write"
+  ]
+}

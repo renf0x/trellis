@@ -1,0 +1,18 @@
+{
+  "id": "runs-reports",
+  "title": "Запуски и отчёты",
+  "version": "0.1.0",
+  "description": "Прогоны Playwright, скриншоты и отчёты.",
+  "icon": "CirclePlay",
+  "stage": 4,
+  "slots": [
+    {
+      "slot": "sidebar",
+      "section": "work",
+      "order": 40
+    }
+  ],
+  "permissions": [
+    "playwright"
+  ]
+}

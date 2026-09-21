@@ -1,0 +1,18 @@
+{
+  "id": "settings",
+  "title": "Настройки",
+  "version": "0.1.0",
+  "description": "Провайдеры LLM, источники, справочники статусов и полей, модули.",
+  "icon": "Settings",
+  "slots": [
+    {
+      "slot": "sidebar",
+      "section": "dev",
+      "order": 90
+    }
+  ],
+  "permissions": [
+    "settings:write"
+  ],
+  "ui": "ui/index.tsx"
+}

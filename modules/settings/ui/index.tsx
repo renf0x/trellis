@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Bot, Check, KeyRound, LogIn, LogOut, MessagesSquare, RefreshCw, Zap } from "lucide-react";
+import { Bot, Check, KeyRound, LogIn, LogOut, MessagesSquare, RefreshCw, Sparkles, Zap } from "lucide-react";
 import type { ChatBucket, ModuleUiProps } from "@trellis/core";
 import type { BucketSettings, LlmSettingsResponse, ProviderId } from "@trellis/ui";
 
@@ -37,6 +37,8 @@ export default function Settings({ api }: ModuleUiProps) {
         <BucketCard bucket="main" title="Основной чат (AI QA агент)" icon={<Bot size={18} />} data={data} api={api} onSaved={load} />
         <BucketCard bucket="dev" title="Чат по доработкам" icon={<MessagesSquare size={18} />} data={data} api={api} onSaved={load} />
       </div>
+      <h2 className="text-sm text-dim">Анализ документации и кейсов</h2>
+      <AnalysisCard data={data} api={api} onSaved={load} onError={setError} />
       <p className="text-xs text-faint">
         Ключи и токены хранятся только локально в <code>data/secrets</code> и не отдаются в браузер. Справочники статусов,
         источники (Azure DevOps, локальные файлы) и срок хранения истории появятся здесь следующими задачами.
@@ -246,6 +248,44 @@ function BucketCard({ bucket, title, icon, data, api, onSaved }: {
         <button disabled={busy} onClick={test} className={`${btn} border border-line`}>{busy ? "Проверяю…" : "Проверить"}</button>
       </div>
       {note && <p className={`mt-2 break-words text-xs ${note.ok ? "text-ok" : "text-bad"}`}>{note.text}</p>}
+    </section>
+  );
+}
+
+function AnalysisCard({ data, api, onSaved, onError }: {
+  data: LlmSettingsResponse; api: Api; onSaved: () => void; onError: (e: string | null) => void;
+}) {
+  const [jev, setJev] = useState(data.analysis.jev);
+  useEffect(() => setJev(data.analysis.jev), [data.analysis.jev]);
+  const save = (next = jev) => api.patch("/api/llm/analysis", { jev: next }).then(() => (onError(null), onSaved()), (e: Error) => onError(e.message));
+  const dirty = JSON.stringify(jev) !== JSON.stringify(data.analysis.jev);
+  return (
+    <section className={card}>
+      <div className="flex items-center gap-2">
+        <Sparkles size={18} />
+        <h3 className="font-semibold">Jev (модель принятия решений)</h3>
+        <label className="ml-auto flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={jev.enabled} onChange={(e) => void save({ ...jev, enabled: e.target.checked })} />
+          Включён
+        </label>
+      </div>
+      <p className="mt-2 text-sm text-dim">
+        Необязательный второй движок для «Сравнения и анализа». По умолчанию анализ делает модель основного чата. Jev отвечает
+        вероятностями без текста, дёшево и быстро разбирает большие пулы пар; объяснения пишет модель чата. Работает через ключ
+        OpenRouter, расходы идут в корзину «Анализ».
+      </p>
+      <div className="mt-3 flex flex-wrap items-end gap-3">
+        <label className="text-xs text-faint">
+          Модель
+          <input value={jev.model} onChange={(e) => setJev({ ...jev, model: e.target.value })} className={`${input} mt-1 block w-64`} />
+        </label>
+        <label className="text-xs text-faint" title="Ниже этой уверенности пару решает модель чата (или она помечается «неуверенно»)">
+          Порог уверенности: {Math.round(jev.threshold * 100)}%
+          <input type="range" min={0} max={1} step={0.05} value={jev.threshold}
+            onChange={(e) => setJev({ ...jev, threshold: Number(e.target.value) })} className="mt-2 block w-56" />
+        </label>
+        <button onClick={() => void save()} disabled={!dirty} className={`${btn} bg-accent`}><Check size={15} /> Сохранить</button>
+      </div>
     </section>
   );
 }

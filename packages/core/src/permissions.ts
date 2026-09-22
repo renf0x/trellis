@@ -1,4 +1,5 @@
 import type { ModuleManifest } from "./manifest.ts";
+import type { ModuleLlm } from "./llm.ts";
 import type { DataStore, MemoryStore } from "./registry-types.ts";
 
 export class PermissionError extends Error {
@@ -32,4 +33,10 @@ export function scopedData(store: DataStore, manifest: ModuleManifest): DataStor
     cases: read ? () => store.cases() : deny("sources:read"),
     replace: can("data:write") ? (s) => store.replace(s) : deny("data:write"),
   };
+}
+
+export function scopedLlm(llm: ModuleLlm, manifest: ModuleManifest): ModuleLlm {
+  if ((manifest.permissions as string[]).includes("llm:main")) return llm;
+  const deny = () => Promise.reject(new PermissionError(manifest.id, "llm:main"));
+  return { chatModel: deny, complete: deny, decide: deny, analysis: deny };
 }

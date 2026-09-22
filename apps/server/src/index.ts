@@ -9,6 +9,7 @@ import {
   PermissionError,
   loadModules,
   scopedData,
+  scopedLlm,
   scopedMemory,
   type MemoryStore,
   type RegistrySnapshot,
@@ -63,6 +64,8 @@ async function main() {
     return reply.status(500).send({ error: "internal error" });
   });
 
+  const llm = await registerLlm(app, dataDir);
+
   // Server entries are loaded once at start; manifests are re-read on each /api/modules call.
   const startup = await loadModules(modulesDir, { disabled: await readDisabled() });
   const serverLoaded = new Set<string>();
@@ -82,6 +85,7 @@ async function main() {
       manifest,
       memory: scopedMemory(arbor as unknown as MemoryStore, manifest),
       data: scopedData(dataStore, manifest),
+      llm: scopedLlm(llm, manifest),
       files: {
         read: (name) => readJson(safeName(name)),
         write: async (name, value) => {
@@ -142,7 +146,6 @@ async function main() {
   });
 
   app.get("/api/memory/check", async () => arbor.check());
-  await registerLlm(app, dataDir);
 
   await app.listen({ host: "127.0.0.1", port });
 }

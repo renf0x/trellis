@@ -2,9 +2,8 @@
   "id": "compare",
   "title": "Сравнение и анализ",
   "version": "0.1.0",
-  "description": "Сопоставление шагов кейсов с требованиями, находки и предложения правок.",
+  "description": "Сверка документации с тест-кейсами: движок основного чата или Jev, отчёты, связи, находки → в чат.",
   "icon": "GitCompare",
-  "stage": 4,
   "slots": [
     {
       "slot": "sidebar",
@@ -16,5 +15,7 @@
     "sources:read",
     "llm:main",
     "arbor:write"
-  ]
+  ],
+  "server": "server/index.ts",
+  "ui": "ui/index.tsx"
 }

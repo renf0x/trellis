@@ -1,3 +1,4 @@
+import type { ModuleLlm } from "./llm.ts";
 import type { ManifestIssue, ModuleManifest } from "./manifest.ts";
 
 export interface LoadedModule {
@@ -122,6 +123,8 @@ export interface ServerModuleContext {
     /** Merges values; null removes a key. */
     set(values: Record<string, string | null>): Promise<void>;
   };
+  /** Main chat model and Jev for batch work; needs llm:main. */
+  llm: ModuleLlm;
   log(message: string): void;
 }
 

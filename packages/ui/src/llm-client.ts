@@ -1,5 +1,5 @@
 // Browser client for /api/llm: settings, streaming chat (NDJSON) and usage.
-import type { ChatBucket, CostTier, Usage } from "@trellis/core";
+import type { AnalysisSettings, ChatBucket, CostTier, Usage } from "@trellis/core";
 
 export type ProviderId = "openrouter" | "chatgpt";
 export interface BucketSettings {
@@ -14,6 +14,7 @@ export interface LlmStatus {
 }
 export interface LlmSettingsResponse {
   settings: Record<ChatBucket, BucketSettings>;
+  analysis: AnalysisSettings;
   status: LlmStatus;
 }
 

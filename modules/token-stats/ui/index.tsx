@@ -1,17 +1,17 @@
 import { useEffect, useState } from "react";
-import type { ChatBucket, CostTier, ModuleUiProps } from "@trellis/core";
+import type { CostTier, ModuleUiProps, UsageBucket } from "@trellis/core";
 import { TIER_LABEL } from "@trellis/ui";
 
 interface Totals { requests: number; inputTokens: number; outputTokens: number; costUsd: number }
 interface UsageResponse {
   days: number;
   tiers: Record<CostTier, Totals>;
-  models: (Totals & { tier: CostTier; provider: string; model: string; bucket: ChatBucket })[];
+  models: (Totals & { tier: CostTier; provider: string; model: string; bucket: UsageBucket })[];
 }
 
 const TIERS: CostTier[] = ["paid", "free", "subscription"];
 const TIER_CLS: Record<CostTier, string> = { paid: "text-warn", free: "text-ok", subscription: "text-[#7aa2ff]" };
-const BUCKET: Record<ChatBucket, string> = { main: "Основной", dev: "Доработки" };
+const BUCKET: Record<UsageBucket, string> = { main: "Основной", dev: "Доработки", analysis: "Анализ" };
 const n = (v: number) => v.toLocaleString("ru");
 
 // Free, paid and subscription usage are deliberately shown apart, never as one sum.

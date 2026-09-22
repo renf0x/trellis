@@ -1,7 +1,7 @@
 // Append-only token ledger (JSONL). Stage 7 may move it to SQLite; the entry shape stays.
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { ChatBucket, CostTier, LedgerEntry } from "@trellis/core";
+import type { CostTier, LedgerEntry, UsageBucket } from "@trellis/core";
 
 export class Ledger {
   constructor(private file: string) {}
@@ -41,7 +41,7 @@ export interface Totals {
 
 export interface UsageSummary {
   tiers: Record<CostTier, Totals>;
-  models: (Totals & { tier: CostTier; provider: string; model: string; bucket: ChatBucket })[];
+  models: (Totals & { tier: CostTier; provider: string; model: string; bucket: UsageBucket })[];
 }
 
 const zero = (): Totals => ({ requests: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 });

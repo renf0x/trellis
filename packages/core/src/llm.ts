@@ -57,15 +57,55 @@ export interface LLMProvider {
 }
 
 /**
+ * Decision model (Jev via OpenRouter /api/alpha/decisions): no text, only probabilities.
+ * noul = yes/no probability; choice picks one of `criteria` keys; score rates on the ordered `criteria` list.
+ */
+export type DecisionQuestion =
+  | { type: "noul"; instructions: string }
+  | { type: "choice"; instructions: string; criteria: Record<string, string> }
+  | { type: "score"; instructions: string; criteria: string[] };
+
+export type DecisionAnswer =
+  | { type: "noul"; noul: number }
+  | { type: "choice"; choice: string; probabilities: Record<string, number>; confidence: number }
+  /** `score` is the expected index into `legend` (0..n-1). */
+  | { type: "score"; score: number; legend: Record<string, string>; probabilities: Record<string, number>; confidence: number };
+
+export interface DecisionResult {
+  model: string;
+  answers: Record<string, DecisionAnswer>;
+  usage: Usage;
+}
+
+/** "Анализ" profile in settings. Off by default: companies may not use Jev at all. */
+export interface AnalysisSettings {
+  jev: { enabled: boolean; model: string; threshold: number };
+}
+
+/** LLM access for module servers (needs llm:main). Usage is written to the ledger under bucket "analysis". */
+export interface ModuleLlm {
+  /** Label of the model the main chat is set to, null when none is configured. */
+  chatModel(): Promise<string | null>;
+  /** One non-streaming answer from the main chat's provider and model. */
+  complete(messages: ChatMessage[], opts?: { signal?: AbortSignal }): Promise<{ text: string; model: string; usage?: Usage }>;
+  /** Jev decision; rejects when the analysis profile has Jev switched off. */
+  decide(state: unknown, questions: Record<string, DecisionQuestion>, opts?: { signal?: AbortSignal }): Promise<DecisionResult>;
+  analysis(): Promise<AnalysisSettings>;
+}
+
+/**
  * Analytics tier: OpenRouter free models, OpenRouter paid models and the ChatGPT subscription
  * are reported separately and never summed together.
  */
 export type CostTier = "free" | "paid" | "subscription";
 
+/** Ledger bucket: the two chats plus batch analysis (compare module), billed apart. */
+export type UsageBucket = ChatBucket | "analysis";
+
 /** One row of the token ledger. */
 export interface LedgerEntry {
   at: string;
-  bucket: ChatBucket;
+  bucket: UsageBucket;
   provider: string;
   model: string;
   tier: CostTier;

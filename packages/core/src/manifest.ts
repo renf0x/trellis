@@ -17,6 +17,7 @@ export const PERMISSIONS = [
   "arbor:write",
   "sources:read",
   "sources:write", // only through confirmed proposals
+  "data:write", // replace imported docs and cases in the local store (connectors)
   "llm:main",
   "llm:dev",
   "playwright",

@@ -41,3 +41,19 @@ body {
   background: var(--color-line);
   border-radius: 4px;
 }
+
+/* Rendered Markdown (docs-view). */
+.md { line-height: 1.65; font-size: 14px; }
+.md > * + * { margin-top: 0.75em; }
+.md h1, .md h2, .md h3, .md h4 { font-weight: 600; margin-top: 1.4em; }
+.md h1 { font-size: 1.5em; } .md h2 { font-size: 1.3em; } .md h3 { font-size: 1.12em; }
+.md a { color: var(--color-accent); }
+.md ul { list-style: disc; padding-left: 1.4em; } .md ol { list-style: decimal; padding-left: 1.4em; }
+.md code { background: var(--color-raised); border-radius: 4px; padding: 0 4px; font-size: 0.92em; }
+.md pre { background: var(--color-raised); border-radius: 8px; padding: 12px; overflow: auto; }
+.md pre code { padding: 0; background: none; }
+.md blockquote { border-left: 3px solid var(--color-line); padding-left: 12px; color: var(--color-dim); }
+.md table { border-collapse: collapse; display: block; overflow: auto; }
+.md th, .md td { border: 1px solid var(--color-line); padding: 4px 10px; }
+.md hr { border-color: var(--color-line); }
+.md img { max-width: 100%; }

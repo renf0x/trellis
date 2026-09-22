@@ -4,7 +4,6 @@
   "version": "0.1.0",
   "description": "Дерево документации из Azure DevOps Wiki и локальных Markdown-файлов.",
   "icon": "FileText",
-  "stage": 3,
   "slots": [
     {
       "slot": "sidebar",
@@ -14,5 +13,7 @@
   ],
   "permissions": [
     "sources:read"
-  ]
+  ],
+  "server": "server/index.ts",
+  "ui": "ui/index.tsx"
 }

@@ -1,6 +1,6 @@
 // Trellis local server: module registry, Arbor runtime vault, module routes.
-import { mkdir, readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import Fastify from "fastify";
 import { ArborBridge, ArborError } from "@trellis/arbor-bridge";
@@ -8,6 +8,7 @@ import {
   HttpError,
   PermissionError,
   loadModules,
+  scopedData,
   scopedMemory,
   type MemoryStore,
   type RegistrySnapshot,
@@ -15,6 +16,7 @@ import {
 } from "@trellis/core/node";
 import { LlmError } from "@trellis/llm";
 import { registerLlm } from "./llm.ts";
+import { SqliteDataStore } from "./store.ts";
 
 const repoRoot = resolve(fileURLToPath(import.meta.url), "../../../..");
 const dataDir = resolve(process.env.TRELLIS_DATA ?? join(repoRoot, "data"));
@@ -30,11 +32,25 @@ async function readDisabled(): Promise<string[]> {
   }
 }
 
+async function readJson<T>(file: string): Promise<T | null> {
+  try {
+    return JSON.parse(await readFile(file, "utf8")) as T;
+  } catch {
+    return null;
+  }
+}
+async function writeJson(file: string, value: unknown) {
+  const tmp = `${file}.tmp`;
+  await writeFile(tmp, JSON.stringify(value, null, 2), { encoding: "utf8", mode: 0o600 });
+  await rename(tmp, file);
+}
+
 async function main() {
   await mkdir(join(dataDir, "config"), { recursive: true });
   const arbor = new ArborBridge({ root: join(dataDir, "vault"), script: join(repoRoot, "arbor.py") });
   if (!arbor.initialized) await arbor.init();
 
+  const dataStore = new SqliteDataStore(join(dataDir, "trellis.db"), join(dataDir, "obsidian"));
   const app = Fastify({ logger: { level: process.env.TRELLIS_LOG ?? "info" } });
 
   app.setErrorHandler((err: Error & { statusCode?: number }, _req, reply) => {
@@ -56,9 +72,35 @@ async function main() {
     const { manifest } = mod;
     const serverEntry = manifest.server;
     if (!mod.enabled || !serverEntry) continue;
+    const filesDir = join(dataDir, "modules", manifest.id);
+    const secretFile = join(dataDir, "secrets", "modules", `${manifest.id}.json`);
+    const safeName = (name: string) => {
+      if (!/^[a-z0-9][a-z0-9._-]{0,60}$/i.test(name) || name.includes("..")) throw new Error(`bad file name ${name}`);
+      return join(filesDir, name.endsWith(".json") ? name : `${name}.json`);
+    };
     const ctx: ServerModuleContext = {
       manifest,
       memory: scopedMemory(arbor as unknown as MemoryStore, manifest),
+      data: scopedData(dataStore, manifest),
+      files: {
+        read: (name) => readJson(safeName(name)),
+        write: async (name, value) => {
+          await mkdir(filesDir, { recursive: true });
+          await writeJson(safeName(name), value);
+        },
+      },
+      secrets: {
+        get: async () => (await readJson<Record<string, string>>(secretFile)) ?? {},
+        set: async (values) => {
+          const next = { ...((await readJson<Record<string, string>>(secretFile)) ?? {}) };
+          for (const [k, v] of Object.entries(values)) {
+            if (v === null) delete next[k];
+            else next[k] = v;
+          }
+          await mkdir(dirname(secretFile), { recursive: true });
+          await writeJson(secretFile, next);
+        },
+      },
       log: (message) => app.log.info({ module: manifest.id }, message),
       route(method, path, handler) {
         app.route({

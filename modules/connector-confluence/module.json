@@ -1,0 +1,13 @@
+{
+  "id": "connector-confluence",
+  "title": "Confluence",
+  "version": "0.1.0",
+  "description": "Подключение к Confluence (Cloud и Server/Data Center): проверка доступа, загрузка страниц пространств в документацию. Только чтение.",
+  "icon": "BookOpen",
+  "slots": [
+    { "slot": "sidebar", "section": "work", "order": 40 }
+  ],
+  "permissions": ["sources:read", "data:write"],
+  "server": "server/index.ts",
+  "ui": "ui/index.tsx"
+}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Bot, Check, KeyRound, LogIn, LogOut, MessagesSquare, RefreshCw, Sparkles, Zap } from "lucide-react";
 import type { ChatBucket, ModuleUiProps } from "@trellis/core";
-import type { BucketSettings, LlmSettingsResponse, ProviderId } from "@trellis/ui";
+import { Block, type BucketSettings, type LlmSettingsResponse, type ProviderId } from "@trellis/ui";
 
 interface GptModel {
   id: string;
@@ -29,19 +29,21 @@ export default function Settings({ api }: ModuleUiProps) {
       {error && <div className="rounded-lg border border-bad/40 p-3 text-sm text-bad">{error}</div>}
       <h2 className="text-sm text-dim">Подключения</h2>
       <div className="grid gap-4 lg:grid-cols-2">
-        <OpenRouterKey api={api} status={data.status} onChange={load} onError={setError} />
-        <ChatGptAccount api={api} status={data.status} onChange={load} onError={setError} />
+        <Block id="settings/openrouter" title="Настройки · Ключ OpenRouter"><OpenRouterKey api={api} status={data.status} onChange={load} onError={setError} /></Block>
+        <Block id="settings/chatgpt" title="Настройки · Подписка ChatGPT"><ChatGptAccount api={api} status={data.status} onChange={load} onError={setError} /></Block>
       </div>
       <h2 className="text-sm text-dim">Модели чатов (у каждого чата своя модель и своя статистика)</h2>
       <div className="grid gap-4 lg:grid-cols-2">
         <BucketCard bucket="main" title="Основной чат (AI QA агент)" icon={<Bot size={18} />} data={data} api={api} onSaved={load} />
-        <BucketCard bucket="dev" title="Чат по доработкам" icon={<MessagesSquare size={18} />} data={data} api={api} onSaved={load} />
+        <Block id="settings/dev-chat" title="Настройки · Модель чата по доработкам">
+          <BucketCard bucket="dev" title="Чат по доработкам" icon={<MessagesSquare size={18} />} data={data} api={api} onSaved={load} />
+        </Block>
       </div>
       <h2 className="text-sm text-dim">Анализ документации и кейсов</h2>
-      <AnalysisCard data={data} api={api} onSaved={load} onError={setError} />
+      <Block id="settings/analysis" title="Настройки · Анализ (Jev)"><AnalysisCard data={data} api={api} onSaved={load} onError={setError} /></Block>
       <p className="text-xs text-faint">
         Ключи и токены хранятся только локально в <code>data/secrets</code> и не отдаются в браузер. Справочники статусов,
-        источники (Azure DevOps, локальные файлы) и срок хранения истории появятся здесь следующими задачами.
+        источники (Confluence, Jira, Qase, локальные файлы) и срок хранения истории появятся здесь следующими задачами.
       </p>
     </div>
   );

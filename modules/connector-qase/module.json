@@ -1,0 +1,13 @@
+{
+  "id": "connector-qase",
+  "title": "Qase",
+  "version": "0.1.0",
+  "description": "Подключение к Qase (в том числе бесплатный тариф): проверка токена и проекта, загрузка тест-кейсов с шагами и сьютами. Только чтение.",
+  "icon": "ListChecks",
+  "slots": [
+    { "slot": "sidebar", "section": "work", "order": 47 }
+  ],
+  "permissions": ["sources:read", "data:write"],
+  "server": "server/index.ts",
+  "ui": "ui/index.tsx"
+}

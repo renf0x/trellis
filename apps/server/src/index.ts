@@ -147,6 +147,22 @@ async function main() {
 
   app.get("/api/memory/check", async () => arbor.check());
 
+  // Interface parts hidden on this device. Only UI prefs, no secrets.
+  const layoutFile = join(dataDir, "config", "ui-layout.json");
+  app.get("/api/ui/layout", async () => (await readJson(layoutFile)) ?? {});
+  app.post("/api/ui/layout", async (req) => {
+    const h = (req.body as { hidden?: unknown } | null)?.hidden;
+    if (!h || typeof h !== "object" || Array.isArray(h)) throw new HttpError(400, "bad layout");
+    const hidden: Record<string, string> = {};
+    for (const [k, v] of Object.entries(h)) {
+      if (!/^(nav|section|panel|block):[\w./-]{1,120}$/.test(k) || typeof v !== "string") throw new HttpError(400, `bad layout key ${k}`);
+      hidden[k] = v.slice(0, 200);
+    }
+    if (Object.keys(hidden).length > 500) throw new HttpError(413, "too many hidden items");
+    await writeJson(layoutFile, { hidden });
+    return { ok: true };
+  });
+
   await app.listen({ host: "127.0.0.1", port });
 }
 

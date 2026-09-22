@@ -81,7 +81,7 @@ export default function DocsView({ api, navigate }: ModuleUiProps) {
               <FileText size={14} /> {doc.container}{doc.path}
               {doc.url && (
                 <a href={doc.url} target="_blank" rel="noreferrer" className="ml-auto inline-flex items-center gap-1 text-accent">
-                  Открыть в Azure <ExternalLink size={12} />
+                  Открыть в источнике <ExternalLink size={12} />
                 </a>
               )}
             </div>
@@ -124,9 +124,9 @@ function Empty({ navigate }: { navigate: (id: string) => void }) {
   return (
     <section className="max-w-xl rounded-xl border border-line bg-panel p-8">
       <h1 className="text-xl font-semibold">Документация</h1>
-      <p className="mt-2 text-dim">Документов пока нет. Подключите Azure DevOps и загрузите вики в приложение.</p>
-      <button onClick={() => navigate("connector-azure-devops")} className="mt-4 flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3 text-sm">
-        <CloudDownload size={16} /> Перейти к Azure DevOps
+      <p className="mt-2 text-dim">Документов пока нет. Подключите Confluence и загрузите страницы в приложение.</p>
+      <button onClick={() => navigate("connector-confluence")} className="mt-4 flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3 text-sm">
+        <CloudDownload size={16} /> Перейти к Confluence
       </button>
     </section>
   );

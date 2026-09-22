@@ -2,7 +2,7 @@
   "id": "docs-view",
   "title": "Документация",
   "version": "0.1.0",
-  "description": "Дерево документации из Azure DevOps Wiki и локальных Markdown-файлов.",
+  "description": "Дерево документации из Confluence, Jira и локальных Markdown-файлов.",
   "icon": "FileText",
   "slots": [
     {

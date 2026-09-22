@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Bot, Check, ExternalLink, MessageSquarePlus, Play, Settings, Sparkles, Square, Undo2, X } from "lucide-react";
 import type { ModuleUiProps } from "@trellis/core";
-import { sendToChat } from "@trellis/ui";
+import { Block, sendToChat } from "@trellis/ui";
 
 type Engine = "chat" | "jev";
 type Kind = "contradicts" | "partial" | "outdated" | "uncertain" | "no-doc" | "no-case" | "error";
@@ -160,6 +160,7 @@ export default function Compare({ api, navigate }: ModuleUiProps) {
             )}
           </div>
         </div>
+        <Block id="compare/stats" title="Сравнение · Сводка по данным">
         <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-faint">
           <span>Документов: {data.docs}</span>
           <span>Кейсов: {data.cases}</span>
@@ -168,7 +169,8 @@ export default function Compare({ api, navigate }: ModuleUiProps) {
           <span>Документов без кейсов: {data.uncoveredDocs}</span>
           <span>Подтверждённых связей: {status.links}</span>
         </div>
-        {noData && <p className="mt-2 text-sm text-warn">Нужны и документация, и тест-кейсы: загрузите их в разделе Azure DevOps.</p>}
+        </Block>
+        {noData && <p className="mt-2 text-sm text-warn">Нужны и документация, и тест-кейсы: загрузите документацию из Confluence, а кейсы из Qase.</p>}
         {r && (
           <div className="mt-3">
             {r.running && (
@@ -184,6 +186,7 @@ export default function Compare({ api, navigate }: ModuleUiProps) {
         {error && <p className="mt-2 text-sm text-bad">{error}</p>}
       </section>
 
+      <Block id="compare/filters" title="Сравнение · Фильтры находок">
       <div className="flex flex-wrap items-center gap-1.5">
         <Chip on={!kind} onClick={() => setKind("")}>Все</Chip>
         {KINDS.map((k) => (
@@ -198,6 +201,7 @@ export default function Compare({ api, navigate }: ModuleUiProps) {
           <option value="rejected">Отклонённые</option>
         </select>
       </div>
+      </Block>
 
       <div className="flex min-h-0 flex-1 gap-4">
         <section className="w-[380px] shrink-0 overflow-auto rounded-xl border border-line bg-panel">
@@ -364,7 +368,7 @@ function Source({ label, title, sub, url }: { label: string; title: string; sub?
       <div className="text-xs text-faint">{label}</div>
       <div className="mt-0.5">{title}</div>
       {sub && <div className="truncate text-xs text-faint">{sub}</div>}
-      {url && <a href={url} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-xs text-accent">Открыть в Azure <ExternalLink size={11} /></a>}
+      {url && <a href={url} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-xs text-accent">Открыть в источнике <ExternalLink size={11} /></a>}
     </div>
   );
 }

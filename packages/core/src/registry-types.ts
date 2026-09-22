@@ -38,7 +38,7 @@ export interface MemoryStore {
   update(id: string, input: MemoryInput): Promise<MemoryEntry>;
 }
 
-/** Normalized records imported from a source (Azure DevOps, local files). Ids are `<source>:<external id>`. */
+/** Normalized records imported from a source (Confluence, Jira, Qase, local files). Ids are `<source>:<external id>`. */
 export interface DocRecord {
   id: string;
   source: string;

@@ -102,7 +102,7 @@ export default function TestCasesView({ api, navigate }: ModuleUiProps) {
           <div className="mt-2 space-y-0.5 text-xs text-faint">{detail.suites.map((s) => <div key={s}>{s}</div>)}</div>
           {detail.url && (
             <a href={detail.url} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-xs text-accent">
-              Открыть в Azure <ExternalLink size={12} />
+              Открыть в источнике <ExternalLink size={12} />
             </a>
           )}
           <ol className="mt-4 space-y-3">
@@ -129,9 +129,9 @@ function Empty({ navigate }: { navigate: (id: string) => void }) {
   return (
     <section className="max-w-xl rounded-xl border border-line bg-panel p-8">
       <h1 className="text-xl font-semibold">Тест-кейсы</h1>
-      <p className="mt-2 text-dim">Кейсов пока нет. Подключите Azure DevOps и загрузите тест-планы в приложение.</p>
-      <button onClick={() => navigate("connector-azure-devops")} className="mt-4 flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3 text-sm">
-        <CloudDownload size={16} /> Перейти к Azure DevOps
+      <p className="mt-2 text-dim">Кейсов пока нет. Подключите Qase и загрузите кейсы в приложение.</p>
+      <button onClick={() => navigate("connector-qase")} className="mt-4 flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3 text-sm">
+        <CloudDownload size={16} /> Перейти к Qase
       </button>
     </section>
   );

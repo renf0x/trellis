@@ -1,12 +1,15 @@
 import { HttpError, type DocRecord, type ServerModuleContext, type TestCaseRecord } from "@trellis/core";
+import { registerChanges, replaceOnce, type ChangeRequest, type Fields } from "@trellis/changes";
 import {
   JiraClient,
   JiraError,
+  getIssue,
   isCloud,
   normalizeBaseUrl,
   searchAll,
   stepsFromDescription,
   testConnection,
+  updateIssue,
   wikiToMarkdown,
   type CheckResult,
   type JiraIssue,
@@ -167,6 +170,56 @@ export function register(ctx: ServerModuleContext) {
       }
     })();
     return current;
+  });
+
+  // Summary/description edits: proposal → diff → confirm → write (see @trellis/changes).
+  const keyOf = (req: ChangeRequest) => {
+    const key = req.id.slice(SOURCE.length + 1);
+    if (!/^[A-Z][A-Z0-9_]*-\d+$/.test(key)) throw new HttpError(422, "id задачи Jira: jira:KEY-12");
+    return key;
+  };
+  const jiraErr = async <T>(f: () => Promise<T>) => {
+    try {
+      return await f();
+    } catch (e) {
+      if (e instanceof JiraError) throw new HttpError(e.status === 404 ? 404 : 502, e.message);
+      throw e;
+    }
+  };
+  registerChanges<JiraIssue>(ctx, {
+    source: SOURCE,
+    async read(req) {
+      const raw = await jiraErr(async () => getIssue(await client(), keyOf(req)));
+      return { raw, fields: { title: raw.fields.summary ?? "", description: raw.fields.description ?? "" } };
+    },
+    plan(live, req) {
+      if (req.steps || req.preconditions !== undefined) {
+        throw new HttpError(422, "В Jira шаги и предусловия хранятся в описании задачи: меняйте их через find/replace по тексту описания");
+      }
+      const after: Fields = {};
+      if (req.title !== undefined) {
+        if (!req.title) throw new HttpError(422, "Название задачи не может быть пустым");
+        after.title = req.title;
+      }
+      // Jira keeps wiki markup; the fragment has to match it, not the Markdown Trellis shows.
+      if (req.find !== undefined) after.description = replaceOnce(live.fields.description, req.find, req.replace!, "описании задачи (вики-разметка)");
+      return after;
+    },
+    async write(live, after, req) {
+      const fields: { summary?: string; description?: string } = {};
+      if (after.title !== undefined && after.title !== live.fields.title) fields.summary = after.title;
+      if (after.description !== undefined && after.description !== live.fields.description) fields.description = after.description;
+      await jiraErr(async () => updateIssue(await client(), keyOf(req), fields));
+    },
+    async local(req) {
+      const s = await settings();
+      const i = await getIssue(await client(s), keyOf(req));
+      const isCase = (await ctx.data.cases()).some((x) => x.id === req.id);
+      return isCase ? { case: toCase(s.baseUrl, i) } : { doc: toDoc(s.baseUrl, i) };
+    },
+    async url(req) {
+      return issueUrl((await settings()).baseUrl, keyOf(req));
+    },
   });
 
   ctx.route("GET", "/issues", async ({ query }) => {

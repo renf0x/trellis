@@ -1,0 +1,13 @@
+{
+  "name": "@trellis/changes",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Confirmed write-back for connectors: proposal with a diff against the live record, explicit confirm, conflict check, audit log",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --import tsx --test src/*.test.ts"
+  }
+}

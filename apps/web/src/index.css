@@ -43,7 +43,7 @@ body {
 }
 
 /* Rendered Markdown (docs-view). */
-.md { line-height: 1.65; font-size: 14px; }
+.md { line-height: 1.65; font-size: 14px; overflow-wrap: anywhere; }
 .md > * + * { margin-top: 0.75em; }
 .md h1, .md h2, .md h3, .md h4 { font-weight: 600; margin-top: 1.4em; }
 .md h1 { font-size: 1.5em; } .md h2 { font-size: 1.3em; } .md h3 { font-size: 1.12em; }

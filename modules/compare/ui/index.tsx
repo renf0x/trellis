@@ -2,10 +2,19 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { Bot, Check, ExternalLink, MessageSquarePlus, Play, Settings, Sparkles, Square, Undo2, X } from "lucide-react";
 import type { ModuleUiProps } from "@trellis/core";
 import { Block, sendToChat } from "@trellis/ui";
+import { CoverageTab, QualityTab } from "./stages.tsx";
 
 type Engine = "chat" | "jev";
 type Kind = "contradicts" | "partial" | "outdated" | "uncertain" | "no-doc" | "no-case" | "error";
 type Status = "new" | "accepted" | "rejected";
+type Stage = "quality" | "coverage" | "pairs";
+type Tab = "findings" | "coverage" | "quality";
+const STAGES: { id: Stage; label: string; hint: string }[] = [
+  { id: "quality", label: "Качество документации", hint: "Jev оценивает каждый документ: непротиворечивость, атомарность, проверяемость, полнота, однозначность" },
+  { id: "coverage", label: "Покрытие требований", hint: "Требования выделяются из текста, Jev решает, каким кейсом каждое покрыто" },
+  { id: "pairs", label: "Сравнение пар", hint: "Кейс сверяется с похожим документом: противоречия и устаревшие шаги" },
+];
+const stageLabel = (s?: Stage) => STAGES.find((x) => x.id === s)?.label;
 
 interface Verdict {
   relation: string;
@@ -28,15 +37,18 @@ interface Finding {
   case?: { id: string; externalId: string; title: string; url?: string };
   doc?: { id: string; title: string; path: string; url?: string };
 }
-interface Run { engine: Engine; running: boolean; total: number; done: number; costUsd: number; message: string; finishedAt?: string }
+interface Run { engine: Engine; running: boolean; total: number; done: number; costUsd: number; message: string; finishedAt?: string; stages?: Stage[]; stage?: Stage }
 interface StatusResponse {
   run: Run | null;
   engines: { chat: string | null; jev: { enabled: boolean; model: string; threshold: number } };
   data: { docs: number; cases: number; pairs: number; orphanCases: number; uncoveredDocs: number };
   counts: Partial<Record<Kind, number>>;
   links: number;
+  quality: number;
+  coverage: { total: number; percent: number | null } | null;
 }
 interface Context { title: string; text: string }
+interface ArchiveItem { slot: string; seq: number; run: Run & { startedAt: string }; findings: number; coverage?: number | null }
 
 const base = "/api/m/compare";
 const KINDS: { id: Kind; label: string; tone: string }[] = [
@@ -53,6 +65,7 @@ const RELATION: Record<string, string> = { consistent: "совпадает", par
 const ACTUALITY: Record<string, string> = { up_to_date: "актуален", partial: "частично устарел", outdated: "устарел", 0: "устарел", 1: "частично", 2: "актуален" };
 const ENGINE: Record<Verdict["engine"], string> = { chat: "модель чата", jev: "Jev", "jev+chat": "Jev не уверен → модель чата" };
 const pct = (x: number) => `${Math.round(x * 100)}%`;
+const when = (iso?: string) => (iso ? new Date(iso).toLocaleString("ru-RU", { dateStyle: "short", timeStyle: "short" }) : "—");
 const btn = "flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm disabled:opacity-40";
 
 export default function Compare({ api, navigate }: ModuleUiProps) {
@@ -66,14 +79,38 @@ export default function Compare({ api, navigate }: ModuleUiProps) {
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  // "" is the latest run; otherwise an archived one, shown read only.
+  const [past, setPast] = useState("");
+  const [runs, setRuns] = useState<ArchiveItem[]>([]);
+  const [tab, setTab] = useState<Tab>("findings");
+  const [stages, setStages] = useState<Record<Stage, boolean>>(() => {
+    try {
+      return { quality: true, coverage: true, pairs: true, ...JSON.parse(localStorage.getItem("trellis.compare.stages") ?? "{}") };
+    } catch {
+      return { quality: true, coverage: true, pairs: true };
+    }
+  });
+  const toggleStage = (id: Stage, on: boolean) => {
+    const next = { ...stages, [id]: on };
+    setStages(next);
+    try {
+      localStorage.setItem("trellis.compare.stages", JSON.stringify(next));
+    } catch { /* private mode: the choice just isn't remembered */ }
+  };
+  const onError = useCallback((m: string) => setError(m), []);
 
   const refresh = useCallback(async () => {
     const s = await api.get<StatusResponse>(`${base}/status`);
     setStatus(s);
     const p = new URLSearchParams({ kind, status: view });
-    setItems((await api.get<{ items: Finding[] }>(`${base}/findings?${p}`)).items);
+    const [found, archive] = await Promise.all([
+      api.get<{ items: Finding[] }>(past ? `${base}/runs/${past}?${p}` : `${base}/findings?${p}`),
+      api.get<{ items: ArchiveItem[] }>(`${base}/runs`),
+    ]);
+    setItems(found.items);
+    setRuns(archive.items);
     return s;
-  }, [api, kind, view]);
+  }, [api, kind, view, past]);
 
   useEffect(() => void refresh().catch((e: Error) => setError(e.message)), [refresh]);
   useEffect(() => {
@@ -95,7 +132,8 @@ export default function Compare({ api, navigate }: ModuleUiProps) {
   async function run() {
     setError(null);
     try {
-      await post("/run", { engine, limit, explain });
+      setPast("");
+      await post("/run", { engine, limit, explain, stages });
       await refresh();
     } catch (e) {
       setError((e as Error).message);
@@ -111,7 +149,7 @@ export default function Compare({ api, navigate }: ModuleUiProps) {
   }
   async function toChat(f: Finding, quote?: string) {
     try {
-      const ctx = await api.get<Context>(`${base}/findings/${f.id}/context`);
+      const ctx = await api.get<Context>(`${base}/findings/${f.id}/context${past ? `?run=${past}` : ""}`);
       sendToChat("main", { title: `${kindOf(f.kind).label}: ${ctx.title}`, text: ctx.text, quote });
       setToast(quote ? "Фрагмент добавлен в чат агента" : "Отчёт добавлен в чат агента");
     } catch (e) {
@@ -122,7 +160,9 @@ export default function Compare({ api, navigate }: ModuleUiProps) {
   if (!status) return <p className="text-dim">{error ?? "Загрузка…"}</p>;
   const { run: r, engines, data } = status;
   const current = items.find((f) => f.id === selected) ?? null;
-  const noData = !data.docs || !data.cases;
+  const noDocs = !data.docs;
+  const needCases = (stages.coverage || stages.pairs) && !data.cases;
+  const noStage = !STAGES.some((s) => stages[s.id]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
@@ -134,8 +174,8 @@ export default function Compare({ api, navigate }: ModuleUiProps) {
             <EngineButton on={engine === "jev"} disabled={!engines.jev.enabled} onClick={() => setEngine("jev")}
               icon={<Sparkles size={15} />} label="Jev" hint={engines.jev.enabled ? `порог ${pct(engines.jev.threshold)}` : "выключен"} />
           </div>
-          <label className="flex items-center gap-2 text-sm text-dim">
-            Пар не больше
+          <label className="flex items-center gap-2 text-sm text-dim" title="Сколько документов, требований и пар проверить моделью на каждом этапе за один запуск">
+            Проверок на этап
             <input type="number" min={1} max={2000} value={limit} onChange={(e) => setLimit(Number(e.target.value))}
               className="h-9 w-20 rounded-lg border border-line bg-raised px-2 text-ink outline-none focus:border-accent" />
           </label>
@@ -154,12 +194,24 @@ export default function Compare({ api, navigate }: ModuleUiProps) {
             {r?.running ? (
               <button onClick={() => void post("/stop", {})} className={`${btn} bg-bad/80`}><Square size={14} /> Остановить</button>
             ) : (
-              <button onClick={() => void run()} disabled={noData || (engine === "chat" && !engines.chat)} className={`${btn} bg-accent`}>
+              <button onClick={() => void run()} disabled={noDocs || needCases || noStage || (engine === "chat" && !engines.chat)} className={`${btn} bg-accent`}>
                 <Play size={15} /> Запустить анализ
               </button>
             )}
           </div>
         </div>
+        <Block id="compare/stages" title="Сравнение · Этапы анализа">
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+          <span className="text-xs text-faint">Этапы:</span>
+          {STAGES.map((st, i) => (
+            <label key={st.id} title={st.hint} className="flex items-center gap-1.5 text-dim">
+              <input type="checkbox" checked={stages[st.id]} onChange={(e) => toggleStage(st.id, e.target.checked)} disabled={r?.running} />
+              <span className="text-faint">{i + 1}.</span> {st.label}
+            </label>
+          ))}
+          {noStage && <span className="text-xs text-warn">Включите хотя бы один этап</span>}
+        </div>
+        </Block>
         <Block id="compare/stats" title="Сравнение · Сводка по данным">
         <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-faint">
           <span>Документов: {data.docs}</span>
@@ -168,9 +220,11 @@ export default function Compare({ api, navigate }: ModuleUiProps) {
           <span>Кейсов без документации: {data.orphanCases}</span>
           <span>Документов без кейсов: {data.uncoveredDocs}</span>
           <span>Подтверждённых связей: {status.links}</span>
+          {status.coverage && <span>Покрытие требований: {status.coverage.percent ?? "—"}{status.coverage.percent !== null && "%"} из {status.coverage.total}</span>}
         </div>
         </Block>
-        {noData && <p className="mt-2 text-sm text-warn">Нужны и документация, и тест-кейсы: загрузите документацию из Confluence, а кейсы из Qase.</p>}
+        {noDocs && <p className="mt-2 text-sm text-warn">Нет документации: загрузите её из Confluence или Jira.</p>}
+        {!noDocs && needCases && <p className="mt-2 text-sm text-warn">Для покрытия и сравнения нужны тест-кейсы: загрузите их из Qase или оставьте только этап «Качество документации».</p>}
         {r && (
           <div className="mt-3">
             {r.running && (
@@ -179,13 +233,37 @@ export default function Compare({ api, navigate }: ModuleUiProps) {
               </div>
             )}
             <div className="text-xs text-dim">
-              {r.running ? `Проверено ${r.done} из ${r.total}` : r.message} · {r.engine === "jev" ? "Jev" : "модель чата"} · ${r.costUsd.toFixed(5)}
+              {r.running ? `${stageLabel(r.stage) ?? "Подготовка"} · проверено ${r.done} из ${r.total}` : r.message} · {r.engine === "jev" ? "Jev" : "модель чата"} · ${r.costUsd.toFixed(5)}
             </div>
           </div>
         )}
         {error && <p className="mt-2 text-sm text-bad">{error}</p>}
       </section>
 
+      <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex rounded-lg border border-line p-0.5">
+          {([["findings", "Находки"], ["coverage", "Покрытие"], ["quality", "Качество документации"]] as const).map(([id, label]) => (
+            <button key={id} onClick={() => setTab(id)}
+              className={`rounded-md px-3 py-1 text-sm ${tab === id ? "bg-accent-soft text-ink" : "text-dim hover:text-ink"}`}>{label}</button>
+          ))}
+        </div>
+        {runs.length > 0 && (
+          <select value={past} onChange={(e) => (setPast(e.target.value), setSelected(null))} title="Прошлые запуски хранятся в архиве (последние 20)"
+            className="ml-auto h-8 max-w-[320px] rounded-lg border border-line bg-raised px-2 text-xs outline-none">
+            <option value="">Последний запуск</option>
+            {runs.slice(1).map((x) => (
+              <option key={x.slot} value={x.slot}>
+                {when(x.run.finishedAt ?? x.run.startedAt)} · {x.run.engine === "jev" ? "Jev" : "модель чата"} · находок {x.findings}
+                {x.coverage != null ? ` · покрытие ${x.coverage}%` : ""}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+
+      {tab === "coverage" && <CoverageTab key={`${past}/${r?.finishedAt}`} api={api} past={past} onError={onError} onToast={setToast} navigate={navigate} />}
+      {tab === "quality" && <QualityTab key={`${past}/${r?.finishedAt}`} api={api} past={past} onError={onError} navigate={navigate} />}
+      {tab === "findings" && (<>
       <Block id="compare/filters" title="Сравнение · Фильтры находок">
       <div className="flex flex-wrap items-center gap-1.5">
         <Chip on={!kind} onClick={() => setKind("")}>Все</Chip>
@@ -221,7 +299,7 @@ export default function Compare({ api, navigate }: ModuleUiProps) {
         </section>
         <section className="min-w-0 flex-1 overflow-auto rounded-xl border border-line bg-panel">
           {current ? (
-            <Report key={current.id} f={current} api={api} onChat={toChat} onStatus={setFindingStatus} />
+            <Report key={`${past}/${current.id}`} f={current} api={api} past={past} onChat={toChat} onStatus={past ? undefined : setFindingStatus} />
           ) : (
             <p className="p-6 text-sm text-faint">
               Выберите находку слева. Отчёт или выделенный в нём фрагмент можно отправить в чат агента справа и задать уточняющие вопросы.
@@ -229,16 +307,19 @@ export default function Compare({ api, navigate }: ModuleUiProps) {
           )}
         </section>
       </div>
+      </>)}
       {toast && <div className="fixed bottom-6 left-1/2 -translate-x-1/2 rounded-lg bg-raised px-4 py-2 text-sm shadow-lg">{toast}</div>}
     </div>
   );
 }
 
-function Report({ f, api, onChat, onStatus }: {
+function Report({ f, api, past, onChat, onStatus }: {
   f: Finding;
   api: ModuleUiProps["api"];
+  past: string;
   onChat(f: Finding, quote?: string): Promise<void>;
-  onStatus(id: string, s: Status): Promise<void>;
+  /** Missing for an archived run: its statuses are a snapshot. */
+  onStatus?(id: string, s: Status): Promise<void>;
 }) {
   const [ctx, setCtx] = useState<Context | null>(null);
   const [sel, setSel] = useState<{ text: string; x: number; y: number } | null>(null);
@@ -246,8 +327,8 @@ function Report({ f, api, onChat, onStatus }: {
   const v = f.verdict;
 
   useEffect(() => {
-    api.get<Context>(`${base}/findings/${f.id}/context`).then(setCtx, () => setCtx(null));
-  }, [api, f.id]);
+    api.get<Context>(`${base}/findings/${f.id}/context${past ? `?run=${past}` : ""}`).then(setCtx, () => setCtx(null));
+  }, [api, f.id, past]);
 
   // Selecting text inside the report offers "В чат" next to the selection.
   function onMouseUp() {
@@ -276,7 +357,9 @@ function Report({ f, api, onChat, onStatus }: {
         {v && <span className="text-xs text-faint">{ENGINE[v.engine]} · {v.models.join(", ")} · ${v.costUsd.toFixed(6)}</span>}
         <div className="ml-auto flex gap-2">
           <button onClick={() => void onChat(f)} className={`${btn} h-8 bg-accent`}><MessageSquarePlus size={14} /> В чат</button>
-          {f.status === "new" ? (
+          {!onStatus ? (
+            <span className="self-center text-xs text-faint">Архивный запуск: только просмотр</span>
+          ) : f.status === "new" ? (
             <>
               <button onClick={() => void onStatus(f.id, "accepted")} className={`${btn} h-8 border border-line text-ok`}><Check size={14} /> Принять</button>
               <button onClick={() => void onStatus(f.id, "rejected")} className={`${btn} h-8 border border-line text-dim`}><X size={14} /> Отклонить</button>

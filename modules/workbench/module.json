@@ -1,0 +1,19 @@
+{
+  "id": "workbench",
+  "title": "Рабочее место",
+  "version": "0.1.0",
+  "description": "Черновики тест-кейсов со статусами: новые кейсы по непокрытым требованиям и правки существующих, отправка в Qase с подтверждением.",
+  "icon": "ClipboardList",
+  "slots": [
+    {
+      "slot": "sidebar",
+      "section": "work",
+      "order": 25
+    }
+  ],
+  "permissions": [
+    "sources:read"
+  ],
+  "server": "server/index.ts",
+  "ui": "ui/index.tsx"
+}

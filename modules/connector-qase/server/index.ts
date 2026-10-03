@@ -1,13 +1,16 @@
 import { HttpError, type DocRecord, type ServerModuleContext, type TestCaseRecord } from "@trellis/core";
+import { registerChanges, replaceOnce, stepsText, type ChangeRequest, type Fields, type Live } from "@trellis/changes";
 import {
   DEFAULT_HOST,
   QaseClient,
   QaseError,
   caseUrl,
+  createCase,
   flattenSteps,
   normalizeHost,
   suitePaths,
   testConnection,
+  updateCase,
   type CheckResult,
   type QaseCase,
   type QaseSuite,
@@ -151,6 +154,104 @@ export function register(ctx: ServerModuleContext) {
     })();
     return current;
   });
+
+  // Case edits from the chat or the workbench: proposal → diff → confirm → write (see @trellis/changes).
+  const caseRef = (req: ChangeRequest) => {
+    const m = /^qase:([A-Z][A-Z0-9]{1,9})-(\d+)$/.exec(req.id);
+    if (req.target !== "case" || !m) throw new HttpError(422, "В Qase правятся только тест-кейсы с id вида qase:CODE-12; описания сьютов правьте в Qase");
+    return { code: m[1], n: Number(m[2]) };
+  };
+  const caseFields = (c: QaseCase): Fields => ({
+    title: c.title ?? "",
+    description: c.description ?? "",
+    preconditions: c.preconditions ?? "",
+    steps: stepsText(flattenSteps(c.steps).map((x) => ({ action: x.action, expected: x.expected }))),
+  });
+  registerChanges<QaseCase>(ctx, {
+    source: SOURCE,
+    async read(req) {
+      const { code, n } = caseRef(req);
+      const raw = await wrap(async () => (await client(await settings())).get<QaseCase>(`case/${code}/${n}`));
+      return { raw, fields: caseFields(raw) };
+    },
+    plan(live: Live<QaseCase>, req) {
+      const after: Fields = {};
+      if (req.title !== undefined) {
+        if (!req.title) throw new HttpError(422, "Название кейса не может быть пустым");
+        after.title = req.title;
+      }
+      if (req.preconditions !== undefined) after.preconditions = req.preconditions;
+      if (req.steps) {
+        if (live.raw.steps?.some((x) => x.steps?.length)) throw new HttpError(422, "У кейса вложенные шаги: такие шаги правьте в Qase, чтобы не потерять структуру");
+        after.steps = stepsText(req.steps);
+      }
+      if (req.find !== undefined) {
+        // Plain-text fields only: steps are structured, change them with `steps`.
+        const field = (["preconditions", "description"] as const).find((k) => (after[k] ?? live.fields[k]).includes(req.find!));
+        if (!field) throw new HttpError(422, "Фрагмент не найден в предусловиях и описании кейса. Шаги меняйте целиком через steps.");
+        after[field] = replaceOnce(after[field] ?? live.fields[field], req.find, req.replace!, field === "description" ? "описании" : "предусловиях");
+      }
+      return after;
+    },
+    async write(live, after, req) {
+      const { code, n } = caseRef(req);
+      const changed = (k: string) => (after[k] !== undefined && after[k] !== live.fields[k] ? after[k] : undefined);
+      await wrap(async () => updateCase(await client(await settings()), code, n, {
+        title: changed("title"), description: changed("description"), preconditions: changed("preconditions"),
+        steps: changed("steps") !== undefined ? req.steps : undefined,
+      }));
+    },
+    async local(req) {
+      const { code, n } = caseRef(req);
+      const s = await settings();
+      const raw = await (await client(s)).get<QaseCase>(`case/${code}/${n}`);
+      const old = (await ctx.data.cases()).find((x) => x.id === req.id);
+      const fresh = toCase(s.host, code, raw, new Map());
+      return { case: old ? { ...fresh, suites: old.suites } : fresh };
+    },
+    async url(req) {
+      const { code, n } = caseRef(req);
+      return caseUrl((await settings()).host, code, n);
+    },
+    // New cases from the workbench or the chat: id "qase:CODE", container = suite path "A / B" (optional).
+    async planCreate(req) {
+      const { code, suite } = await newCaseTarget(req);
+      return {
+        suite: suite ? `${code} / ${suite.path}` : `${code} (без сьюта)`,
+        title: req.title ?? "",
+        preconditions: req.preconditions ?? "",
+        steps: stepsText(req.steps ?? []),
+      };
+    },
+    async create(req) {
+      const { code, suite, paths } = await newCaseTarget(req);
+      const s = await settings();
+      const made = await wrap(async () => createCase(await client(s), code, {
+        title: req.title!, preconditions: req.preconditions, suiteId: suite?.id, steps: req.steps,
+      }));
+      const raw: QaseCase = {
+        id: made.id, title: req.title!, preconditions: req.preconditions, suite_id: suite?.id, status: 1,
+        steps: (req.steps ?? []).map((x, i) => ({ position: i + 1, action: x.action, expected_result: x.expected, data: x.data })),
+      };
+      return { id: `${SOURCE}:${code}-${made.id}`, url: caseUrl(s.host, code, made.id), case: toCase(s.host, code, raw, paths) };
+    },
+  });
+
+  /** Project and suite for a new case; the suite is looked up by its path, as Trellis shows it. */
+  async function newCaseTarget(req: ChangeRequest) {
+    const m = /^qase:([A-Z][A-Z0-9]{1,9})$/.exec(req.id);
+    if (req.target !== "case" || !m) throw new HttpError(422, "Новый кейс создаётся в проекте: id вида qase:CODE");
+    const code = m[1];
+    const paths = new Map<number, string>();
+    if (!req.container) return { code, paths, suite: undefined };
+    const all = await wrap(async () => (await client(await settings())).all<QaseSuite>(`suite/${code}`));
+    for (const [id, path] of suitePaths(all)) paths.set(id, path);
+    const norm = (x: string) => x.split("/").map((p) => p.trim().toLowerCase()).filter(Boolean).join(" / ");
+    const want = norm(req.container.replace(new RegExp(`^${code}\\s*/`), ""));
+    const hit = [...paths].find(([, path]) => norm(path) === want);
+    if (!hit) throw new HttpError(422, `Сьют «${req.container}» не найден в проекте ${code}. Укажите путь как в Qase, например «Авторизация / Вход», или оставьте пустым.`);
+    return { code, paths, suite: { id: hit[0], path: hit[1] } };
+  }
 
   ctx.route("GET", "/projects", async () => {
     const s = await settings();

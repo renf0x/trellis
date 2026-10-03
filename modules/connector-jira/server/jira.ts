@@ -1,5 +1,5 @@
 // Jira REST client for Cloud (email + API token, Basic) and Server/Data Center (personal access token, Bearer).
-// Read-only. REST v2 is used everywhere: it returns descriptions as wiki markup on both Cloud and Server.
+// Reads; writes summary/description only through confirmed proposals. REST v2 is used everywhere: it returns descriptions as wiki markup on both Cloud and Server.
 import type { TestStepRecord } from "@trellis/core";
 
 export interface JiraConfig {
@@ -64,12 +64,22 @@ export class JiraClient {
     return { Authorization: `Bearer ${this.token}` };
   }
 
-  async get<T>(path: string, query: Record<string, string | number | undefined> = {}): Promise<T> {
+  get<T>(path: string, query: Record<string, string | number | undefined> = {}): Promise<T> {
+    return this.request<T>("GET", path, query);
+  }
+
+  async request<T>(method: "GET" | "PUT", path: string, query: Record<string, string | number | undefined> = {}, body?: unknown): Promise<T> {
     const url = new URL(`${this.cfg.baseUrl}/rest/api/2/${path}`);
     for (const [k, v] of Object.entries(query)) if (v !== undefined) url.searchParams.set(k, String(v));
     let res: Response;
     try {
-      res = await this.fetchImpl(url, { headers: { Accept: "application/json", ...this.auth() }, redirect: "manual", signal: AbortSignal.timeout(20_000) });
+      res = await this.fetchImpl(url, {
+        method,
+        headers: { Accept: "application/json", ...this.auth(), ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        redirect: "manual",
+        signal: AbortSignal.timeout(20_000),
+      });
     } catch (err) {
       if (err instanceof JiraError) throw err;
       const e = err as Error & { cause?: { code?: string } };
@@ -85,6 +95,7 @@ export class JiraClient {
     const text = await res.text();
     if (res.status >= 300 && res.status < 400) throw new JiraError("auth", res.status, "Jira перенаправляет на страницу входа: проверьте токен.");
     if (!res.ok) throw classify(res.status, text, res.headers);
+    if (!text) return undefined as T;
     try {
       return JSON.parse(text) as T;
     } catch {
@@ -106,6 +117,16 @@ export interface JiraIssue {
     labels?: string[];
     project?: { key: string; name: string };
   };
+}
+
+/** One issue with the fields Trellis reads. */
+export function getIssue(c: JiraClient, key: string) {
+  return c.get<JiraIssue>(`issue/${encodeURIComponent(key)}`, { fields: FIELDS });
+}
+
+/** Writes summary and/or description (wiki markup). Jira answers 204. */
+export function updateIssue(c: JiraClient, key: string, fields: { summary?: string; description?: string }) {
+  return c.request<void>("PUT", `issue/${encodeURIComponent(key)}`, { notifyUsers: "false" }, { fields });
 }
 
 const FIELDS = "summary,description,status,issuetype,priority,components,labels,project";

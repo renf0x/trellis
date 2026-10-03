@@ -42,6 +42,30 @@ function weigh(counts: Map<string, number>, idf: Map<string, number>): Vec {
   return v;
 }
 
+/** For each query text, the indexes of the `k` most similar target texts (cosine ≥ `min`), best first. */
+export function similar(queries: string[], targets: string[], k: number, min: number): { target: number; similarity: number }[][] {
+  const qCounts = queries.map((t) => tf(terms(t)));
+  const tCounts = targets.map((t) => tf(terms(t)));
+  const df = new Map<string, number>();
+  for (const m of [...qCounts, ...tCounts]) for (const t of m.keys()) df.set(t, (df.get(t) ?? 0) + 1);
+  const n = qCounts.length + tCounts.length;
+  const idf = new Map([...df].map(([t, c]) => [t, Math.log((n + 1) / (c + 1)) + 1] as const));
+  const index = new Map<string, { target: number; w: number }[]>();
+  tCounts.forEach((m, target) => {
+    for (const [t, w] of weigh(m, idf)) {
+      let list = index.get(t);
+      if (!list) index.set(t, (list = []));
+      list.push({ target, w });
+    }
+  });
+  return qCounts.map((m) => {
+    const score = new Map<number, number>();
+    for (const [t, w] of weigh(m, idf)) for (const p of index.get(t) ?? []) score.set(p.target, (score.get(p.target) ?? 0) + w * p.w);
+    return [...score].filter(([, s]) => s >= min).sort((a, b) => b[1] - a[1]).slice(0, k)
+      .map(([target, s]) => ({ target, similarity: Math.round(s * 1000) / 1000 }));
+  });
+}
+
 export interface Pair { caseId: string; docId: string; similarity: number }
 export interface Pairing {
   pairs: Pair[];

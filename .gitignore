@@ -10,12 +10,14 @@ coverage/
 .env.*
 data/
 
-# Claude and Context Arbor files stay local (owner's git rules)
+# Claude and Context Arbor files stay local (owner's git rules).
+# arbor.py (the app's memory engine) and AGENTS.md (rules for the tester's agent) are tracked.
 .claude/
 CLAUDE.md
-AGENTS.md
 AGENT_CONTEXT.md
-arbor.py
 memory/
 tests/
 *.tsbuildinfo
+
+# Tester data backups made by update.cmd and data migrations
+data-backups/

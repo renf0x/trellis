@@ -1,12 +1,18 @@
 import { useEffect, useState } from "react";
-import { CloudDownload, ExternalLink, Search, TriangleAlert, X } from "lucide-react";
+import { ClipboardPlus, CloudDownload, ExternalLink, MessageSquarePlus, Search, TriangleAlert, X } from "lucide-react";
 import type { ModuleUiProps, SourceInfo, TestCaseRecord } from "@trellis/core";
+import { sendToChat } from "@trellis/ui";
 
 type Row = Omit<TestCaseRecord, "steps"> & { stepCount: number; noExpected: boolean };
 interface ListResponse { sources: SourceInfo[]; total: number; states: string[]; suites: string[]; items: Row[] }
 
 const base = "/api/m/testcases-view";
 const control = "h-9 rounded-lg border border-line bg-raised px-3 text-sm outline-none focus:border-accent";
+
+function caseText(c: TestCaseRecord) {
+  const steps = c.steps.map((s, i) => (s.kind === "shared" ? `${i + 1}. [общие шаги] ${s.action}` : `${i + 1}. ${s.action}\n   Ожидается: ${s.expected || "—"}`));
+  return `Тест-кейс (id: ${c.id})\n#${c.externalId} ${c.title}\nСтатус: ${c.state}\nНаборы: ${c.suites.join("; ")}\n\n${steps.join("\n") || "(нет шагов)"}`;
+}
 
 export default function TestCasesView({ api, navigate }: ModuleUiProps) {
   const [q, setQ] = useState("");
@@ -30,6 +36,21 @@ export default function TestCasesView({ api, navigate }: ModuleUiProps) {
     if (!selected) return setDetail(null);
     api.get<TestCaseRecord>(`${base}/case?id=${encodeURIComponent(selected)}`).then(setDetail, (e: Error) => setError(e.message));
   }, [api, selected]);
+
+  /** Opens a draft edit of the case on the workbench (the existing draft, if there is one). */
+  async function toWork(caseId: string) {
+    try {
+      const it = await api.post<{ id: string }>("/api/m/workbench/items", { kind: "edit", caseId });
+      try {
+        localStorage.setItem("trellis.workbench.open", it.id);
+      } catch {
+        /* the workbench just opens without a selection */
+      }
+      navigate("workbench");
+    } catch (e) {
+      setError(/404|not found/i.test((e as Error).message) ? "Модуль «Рабочее место» выключен: включите его в настройках" : (e as Error).message);
+    }
+  }
 
   if (!data) return <p className="text-dim">{error ?? "Загрузка…"}</p>;
   if (!data.total) return <Empty navigate={navigate} />;
@@ -100,11 +121,22 @@ export default function TestCasesView({ api, navigate }: ModuleUiProps) {
             <button onClick={() => setSelected(null)} className="text-faint hover:text-ink"><X size={18} /></button>
           </div>
           <div className="mt-2 space-y-0.5 text-xs text-faint">{detail.suites.map((s) => <div key={s}>{s}</div>)}</div>
-          {detail.url && (
-            <a href={detail.url} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-xs text-accent">
-              Открыть в источнике <ExternalLink size={12} />
-            </a>
-          )}
+          <div className="mt-2 flex gap-3 text-xs">
+            <button onClick={() => sendToChat("main", { title: `Кейс #${detail.externalId} ${detail.title}`, text: caseText(detail) })}
+              title="Отправить кейс в чат агента: можно обсудить его и попросить правку" className="inline-flex items-center gap-1 text-accent">
+              <MessageSquarePlus size={12} /> В чат
+            </button>
+            <button onClick={() => void toWork(detail.id)} title="Черновик правки этого кейса на рабочем месте"
+              className="inline-flex items-center gap-1 text-accent">
+              <ClipboardPlus size={12} /> В работу
+            </button>
+            {detail.url && (
+              <a href={detail.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-accent">
+                Открыть в источнике <ExternalLink size={12} />
+              </a>
+            )}
+          </div>
+          {error && <p className="mt-2 text-xs text-bad">{error}</p>}
           <ol className="mt-4 space-y-3">
             {detail.steps.length === 0 && <p className="text-sm text-warn">У кейса нет шагов.</p>}
             {detail.steps.map((s, i) => (

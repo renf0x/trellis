@@ -2,12 +2,12 @@
   "id": "connector-jira",
   "title": "Jira",
   "version": "0.1.0",
-  "description": "Подключение к Jira (Cloud и Server/Data Center): проверка доступа, загрузка задач по JQL в документацию и тест-кейсы. Только чтение.",
+  "description": "Подключение к Jira (Cloud и Server/Data Center): проверка доступа, загрузка задач по JQL в документацию и тест-кейсы. Правки — только после подтверждения в чате (дифф, проверка конфликта, журнал).",
   "icon": "SquareKanban",
   "slots": [
     { "slot": "sidebar", "section": "work", "order": 45 }
   ],
-  "permissions": ["sources:read", "data:write"],
+  "permissions": ["sources:read", "data:write", "sources:write"],
   "server": "server/index.ts",
   "ui": "ui/index.tsx"
 }

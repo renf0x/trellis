@@ -1,4 +1,4 @@
-// Confluence REST client, read only.
+// Confluence REST client: reads, plus page updates through confirmed proposals.
 // Cloud (https://site.atlassian.net/wiki): email + API token (Basic), pages via REST v2 with cursor paging.
 // Server/Data Center: personal access token (Bearer), pages via REST v1 with start/limit.
 
@@ -60,13 +60,23 @@ export class ConfluenceClient {
   }
 
   /** `path` is relative to the base, e.g. "rest/api/user/current" or "api/v2/pages". Absolute next-links are accepted too. */
-  async get<T>(path: string, query: Record<string, string | number | undefined> = {}): Promise<T> {
+  get<T>(path: string, query: Record<string, string | number | undefined> = {}): Promise<T> {
+    return this.request<T>("GET", path, query);
+  }
+
+  async request<T>(method: "GET" | "PUT", path: string, query: Record<string, string | number | undefined> = {}, body?: unknown): Promise<T> {
     const url = /^https?:/.test(path) ? new URL(path) : new URL(`${this.baseUrl}/${path.replace(/^\//, "")}`);
     for (const [k, v] of Object.entries(query)) if (v !== undefined) url.searchParams.set(k, String(v));
     for (let attempt = 0; ; attempt++) {
       let res: Response;
       try {
-        res = await this.fetchImpl(url, { headers: { Accept: "application/json", ...this.auth() }, redirect: "manual", signal: AbortSignal.timeout(30_000) });
+        res = await this.fetchImpl(url, {
+          method,
+          headers: { Accept: "application/json", ...this.auth(), ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+          body: body === undefined ? undefined : JSON.stringify(body),
+          redirect: "manual",
+          signal: AbortSignal.timeout(30_000),
+        });
       } catch (err) {
         if (err instanceof ConfluenceError) throw err;
         const e = err as Error & { cause?: { code?: string } };
@@ -79,13 +89,14 @@ export class ConfluenceClient {
         if (code === "TimeoutError" || code === "AbortError") throw new ConfluenceError("network", 0, `${host} не ответил за 30 с: VPN или прокси?`);
         throw new ConfluenceError("network", 0, `Нет соединения с ${host}: ${e.message}`);
       }
-      if (res.status === 429 && attempt < 2) {
+      if (res.status === 429 && attempt < 2 && method === "GET") {
         await new Promise((r) => setTimeout(r, Math.min(Number(res.headers.get("retry-after")) || 5, 30) * 1000));
         continue;
       }
       const text = await res.text();
       if (res.status >= 300 && res.status < 400) throw new ConfluenceError("auth", res.status, "Confluence перенаправляет на страницу входа: проверьте адрес и токен.");
       if (!res.ok) throw classify(res.status, text);
+      if (!text) return undefined as T;
       try {
         return JSON.parse(text) as T;
       } catch {
@@ -97,6 +108,28 @@ export class ConfluenceClient {
 
 export interface Space { id?: string; key: string; name: string }
 export interface Page { id: string; title: string; parentId?: string; body: string; webui?: string; version?: number }
+
+/** One page with its storage body and version number. */
+export async function getPage(c: ConfluenceClient, id: string): Promise<{ id: string; title: string; body: string; version: number }> {
+  if (c.cloud) {
+    const p = await c.get<{ id: string; title: string; body?: { storage?: { value?: string } }; version?: { number?: number } }>(
+      `api/v2/pages/${encodeURIComponent(id)}`, { "body-format": "storage" });
+    return { id: p.id, title: p.title, body: p.body?.storage?.value ?? "", version: p.version?.number ?? 1 };
+  }
+  const p = await c.get<{ id: string; title: string; body?: { storage?: { value?: string } }; version?: { number?: number } }>(
+    `rest/api/content/${encodeURIComponent(id)}`, { expand: "body.storage,version" });
+  return { id: p.id, title: p.title, body: p.body?.storage?.value ?? "", version: p.version?.number ?? 1 };
+}
+
+/** Saves a new page version; Confluence rejects it (409) if `version` is no longer the latest. */
+export function updatePage(c: ConfluenceClient, page: { id: string; title: string; body: string; version: number }, message: string) {
+  const version = { number: page.version + 1, message: message.slice(0, 250) };
+  return c.cloud
+    ? c.request("PUT", `api/v2/pages/${encodeURIComponent(page.id)}`, {},
+      { id: page.id, status: "current", title: page.title, body: { representation: "storage", value: page.body }, version })
+    : c.request("PUT", `rest/api/content/${encodeURIComponent(page.id)}`, {},
+      { id: page.id, type: "page", title: page.title, body: { storage: { value: page.body, representation: "storage" } }, version });
+}
 
 /** Spaces visible to the token. */
 export async function listSpaces(c: ConfluenceClient, max = 500): Promise<Space[]> {

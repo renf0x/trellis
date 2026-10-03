@@ -1,7 +1,9 @@
 import { HttpError, type DocRecord, type ServerModuleContext } from "@trellis/core";
+import { registerChanges, replaceOnce, type ChangeRequest, type Fields } from "@trellis/changes";
 import {
   ConfluenceClient,
   ConfluenceError,
+  getPage,
   getSpace,
   isCloud,
   listSpaces,
@@ -10,6 +12,7 @@ import {
   spacePages,
   storageToMarkdown,
   testConnection,
+  updatePage,
   type CheckResult,
   type Page,
   type Space,
@@ -146,5 +149,52 @@ export function register(ctx: ServerModuleContext) {
       }
     })();
     return current;
+  });
+
+  // Page edits: proposal → diff → confirm → write a new page version (see @trellis/changes).
+  type Live = Awaited<ReturnType<typeof getPage>>;
+  const pageOf = (req: ChangeRequest) => {
+    const m = /^confluence:[^:]+:(\d+)$/.exec(req.id);
+    if (req.target !== "doc" || !m) throw new HttpError(422, "id страницы Confluence: confluence:SPACE:123");
+    return m[1];
+  };
+  const escapeXml = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  /** The fragment is looked up in the page source; text from Trellis may come with entities escaped there. */
+  const newBody = (body: string, req: ChangeRequest) => {
+    if (req.find === undefined) return body;
+    if (/<[a-z!]/i.test(req.find) || body.includes(req.find) && !body.includes(escapeXml(req.find))) {
+      return replaceOnce(body, req.find, req.replace!, "исходнике страницы");
+    }
+    return replaceOnce(body, escapeXml(req.find), escapeXml(req.replace!), "исходнике страницы");
+  };
+  registerChanges<Live>(ctx, {
+    source: SOURCE,
+    async read(req) {
+      const raw = await wrap(async () => getPage(await client(await settings()), pageOf(req)));
+      return { raw, version: String(raw.version), fields: { title: raw.title, text: storageToMarkdown(raw.body) } };
+    },
+    plan(live, req) {
+      if (req.steps || req.preconditions !== undefined) throw new HttpError(422, "Страница Confluence меняется через title или find/replace");
+      const after: Fields = {};
+      if (req.title !== undefined) {
+        if (!req.title) throw new HttpError(422, "Название страницы не может быть пустым");
+        after.title = req.title;
+      }
+      if (req.find !== undefined) after.text = storageToMarkdown(newBody(live.raw.body, req));
+      return after;
+    },
+    async write(live, after, req) {
+      const page = { ...live.raw, title: after.title ?? live.raw.title, body: newBody(live.raw.body, req) };
+      await wrap(async () => updatePage(await client(await settings()), page, `Trellis: ${req.reason}`));
+    },
+    async local(req) {
+      const raw = await getPage(await client(await settings()), pageOf(req));
+      const old = (await ctx.data.docs()).find((d) => d.id === req.id);
+      return old ? { doc: { ...old, title: raw.title, content: storageToMarkdown(raw.body) } } : {};
+    },
+    async url(req) {
+      const s = await settings();
+      return s.baseUrl ? `${s.baseUrl}/pages/viewpage.action?pageId=${pageOf(req)}` : undefined;
+    },
   });
 }

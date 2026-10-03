@@ -1,4 +1,4 @@
-// Qase REST API v1 client (read only). Auth: header `Token: <API token>`.
+// Qase REST API v1 client: reads, plus case updates through confirmed proposals. Auth: header `Token: <API token>`.
 // Docs: https://developers.qase.io — list endpoints page with limit (max 100) and offset.
 
 export class QaseError extends Error {
@@ -51,7 +51,11 @@ export class QaseClient {
     return !!this.token;
   }
 
-  async get<T>(path: string, query: Record<string, string | number> = {}): Promise<T> {
+  get<T>(path: string, query: Record<string, string | number> = {}): Promise<T> {
+    return this.request<T>("GET", path, query);
+  }
+
+  async request<T>(method: "GET" | "PATCH" | "POST", path: string, query: Record<string, string | number> = {}, payload?: unknown): Promise<T> {
     if (!this.token) throw new QaseError(401, "Укажите API-токен Qase");
     const url = new URL(`/v1/${path.replace(/^\//, "")}`, this.host);
     for (const [k, v] of Object.entries(query)) url.searchParams.set(k, String(v));
@@ -59,7 +63,9 @@ export class QaseClient {
       let res: Response;
       try {
         res = await this.fetchImpl(url, {
-          headers: { Token: this.token, Accept: "application/json" },
+          method,
+          headers: { Token: this.token, Accept: "application/json", ...(payload === undefined ? {} : { "Content-Type": "application/json" }) },
+          body: payload === undefined ? undefined : JSON.stringify(payload),
           signal: AbortSignal.timeout(TIMEOUT_MS),
         });
       } catch (e) {
@@ -106,6 +112,27 @@ export interface QaseCase {
   suite_id?: number | null;
   steps?: QaseStep[];
 }
+/** Writes title, preconditions and steps of a case. Steps replace the old ones as a whole. */
+export function updateCase(c: QaseClient, code: string, id: number,
+  patch: { title?: string; description?: string; preconditions?: string; steps?: { action: string; expected: string; data?: string }[] }) {
+  const body: Record<string, unknown> = {};
+  if (patch.title !== undefined) body.title = patch.title;
+  if (patch.description !== undefined) body.description = patch.description;
+  if (patch.preconditions !== undefined) body.preconditions = patch.preconditions;
+  if (patch.steps) body.steps = patch.steps.map((s, i) => ({ position: i + 1, action: s.action, expected_result: s.expected, data: s.data ?? "" }));
+  return c.request<{ id: number }>("PATCH", `case/${code}/${id}`, {}, body);
+}
+
+/** Creates a case; Qase gives it the next number in the project. */
+export function createCase(c: QaseClient, code: string,
+  v: { title: string; preconditions?: string; suiteId?: number; steps?: { action: string; expected: string; data?: string }[] }) {
+  const body: Record<string, unknown> = { title: v.title };
+  if (v.preconditions) body.preconditions = v.preconditions;
+  if (v.suiteId) body.suite_id = v.suiteId;
+  if (v.steps?.length) body.steps = v.steps.map((s, i) => ({ position: i + 1, action: s.action, expected_result: s.expected, data: s.data ?? "" }));
+  return c.request<{ id: number }>("POST", `case/${code}`, {}, body);
+}
+
 export interface QaseSuite { id: number; title: string; parent_id?: number | null; description?: string | null; preconditions?: string | null }
 export interface QaseProject { title: string; code: string; counts?: { cases?: number; suites?: number } }
 

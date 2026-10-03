@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ChevronRight, CloudDownload, ExternalLink, FileText, Search } from "lucide-react";
+import { ChevronRight, CloudDownload, ExternalLink, FileText, MessageSquarePlus, Search } from "lucide-react";
 import type { ModuleUiProps, DocRecord, SourceInfo } from "@trellis/core";
+import { sendToChat } from "@trellis/ui";
+import { DocRemarks, RemarksBoard, useRemarks } from "./remarks.tsx";
 
 type Item = Pick<DocRecord, "id" | "source" | "container" | "path" | "title">;
 interface ListResponse { sources: SourceInfo[]; total: number; items: Item[] }
@@ -37,6 +39,8 @@ export default function DocsView({ api, navigate }: ModuleUiProps) {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [doc, setDoc] = useState<DocRecord | null>(null);
+  const [mode, setMode] = useState<"pages" | "remarks">("pages");
+  const remarks = useRemarks(api);
 
   useEffect(() => {
     const t = setTimeout(() => setQuery(q.trim()), 250);
@@ -57,6 +61,15 @@ export default function DocsView({ api, navigate }: ModuleUiProps) {
   return (
     <div className="flex h-full min-h-0 gap-4">
       <aside className="flex w-80 shrink-0 flex-col rounded-xl border border-line bg-panel">
+        {remarks.available && (
+          <div className="mx-3 mt-3 flex rounded-lg border border-line p-0.5 text-sm">
+            <button onClick={() => setMode("pages")} className={`flex-1 rounded-md py-1 ${mode === "pages" ? "bg-accent-soft text-ink" : "text-dim hover:text-ink"}`}>Страницы</button>
+            <button onClick={() => (setMode("remarks"), void remarks.reload())}
+              className={`flex-1 rounded-md py-1 ${mode === "remarks" ? "bg-accent-soft text-ink" : "text-dim hover:text-ink"}`}>
+              Замечания{remarks.counts.new > 0 && <span className="ml-1 text-warn">{remarks.counts.new}</span>}
+            </button>
+          </div>
+        )}
         <label className="m-3 flex h-9 items-center gap-2 rounded-lg border border-line bg-raised px-3 text-dim">
           <Search size={15} />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Поиск по названию и тексту"
@@ -66,26 +79,36 @@ export default function DocsView({ api, navigate }: ModuleUiProps) {
           {query ? `Найдено: ${data.items.length} из ${data.total}` : `Страниц: ${data.total}`}
         </div>
         <div className="min-h-0 flex-1 overflow-auto px-2 pb-3">
-          {tree.map((n) => <TreeNode key={n.path} node={n} selected={selected} onSelect={setSelected} depth={0} open={!!query} />)}
+          {tree.map((n) => <TreeNode key={n.path} node={n} selected={selected} onSelect={(id) => (setSelected(id), setMode("pages"))} depth={0} open={!!query} />)}
         </div>
         <div className="border-t border-line px-3 py-2 text-[11px] text-faint">
           {data.sources.map((s) => <div key={s.source}>{s.title} · {new Date(s.syncedAt).toLocaleString()}</div>)}
         </div>
       </aside>
       <article className="min-w-0 flex-1 overflow-auto rounded-xl border border-line bg-panel p-6">
-        {!doc ? (
+        {mode === "remarks" ? (
+          <RemarksBoard api={api} onOpenDoc={(id) => (setSelected(id), setMode("pages"))} />
+        ) : !doc ? (
           <p className="text-faint">Выберите страницу слева.</p>
         ) : (
           <>
             <div className="mb-4 flex items-center gap-2 text-xs text-faint">
-              <FileText size={14} /> {doc.container}{doc.path}
+              <FileText size={14} className="shrink-0" />
+              <span className="min-w-0 truncate" title={`${doc.container}${doc.path}`}>{doc.container}{doc.path}</span>
+              <button
+                title="Отправить страницу в чат агента: можно обсудить её и попросить правку"
+                onClick={() => sendToChat("main", { title: `Документ: ${doc.title}`, text: `Документация (id: ${doc.id})\n# ${doc.title}\nПуть: ${doc.container}${doc.path}\n\n${doc.content.slice(0, 12000)}` })}
+                className="ml-auto inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-accent">
+                <MessageSquarePlus size={12} /> В чат
+              </button>
               {doc.url && (
-                <a href={doc.url} target="_blank" rel="noreferrer" className="ml-auto inline-flex items-center gap-1 text-accent">
+                <a href={doc.url} target="_blank" rel="noreferrer" className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-accent">
                   Открыть в источнике <ExternalLink size={12} />
                 </a>
               )}
             </div>
             <h1 className="mb-4 text-2xl font-semibold">{doc.title}</h1>
+            <DocRemarks key={doc.id} api={api} docId={doc.id} />
             <div className="md">
               {doc.content.trim() ? <Markdown remarkPlugins={[remarkGfm]}>{doc.content}</Markdown> : <p className="text-faint">Пустая страница.</p>}
             </div>

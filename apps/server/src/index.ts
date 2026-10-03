@@ -16,7 +16,9 @@ import {
   type ServerModuleContext,
 } from "@trellis/core/node";
 import { LlmError } from "@trellis/llm";
+import { registerChats } from "./chats.ts";
 import { registerLlm } from "./llm.ts";
+import { migrateData } from "./migrate.ts";
 import { SqliteDataStore } from "./store.ts";
 
 const repoRoot = resolve(fileURLToPath(import.meta.url), "../../../..");
@@ -47,6 +49,8 @@ async function writeJson(file: string, value: unknown) {
 }
 
 async function main() {
+  // Before anything opens the database: upgrade the data format (with a backup) or refuse newer data.
+  await migrateData(dataDir, (msg) => console.log(msg));
   await mkdir(join(dataDir, "config"), { recursive: true });
   const arbor = new ArborBridge({ root: join(dataDir, "vault"), script: join(repoRoot, "arbor.py") });
   if (!arbor.initialized) await arbor.init();
@@ -65,6 +69,7 @@ async function main() {
   });
 
   const llm = await registerLlm(app, dataDir);
+  registerChats(app, dataDir);
 
   // Server entries are loaded once at start; manifests are re-read on each /api/modules call.
   const startup = await loadModules(modulesDir, { disabled: await readDisabled() });

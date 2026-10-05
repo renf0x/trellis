@@ -47,6 +47,8 @@ export interface ChatSnapshot {
   tabs: ChatTab[];
   /** Load or save problem; the chat keeps working in memory. */
   storeError: string | null;
+  /** Text put into the input by a button elsewhere (a test run prompt); `seq` changes each time it is set. */
+  draft?: { text: string; seq: number };
 }
 
 interface Conv {
@@ -60,7 +62,20 @@ interface Conv {
   abort?: AbortController;
   /** Saves of one conversation run in order, so an older one never overwrites a newer one. */
   saving?: Promise<void>;
+  draft?: { text: string; seq: number };
 }
+
+export interface OpenSubjectOptions {
+  /** Put into the input, ready to send or edit. */
+  draft?: string;
+  /** A new conversation even when one about the same subject exists, unless that one has nothing sent yet. */
+  fresh?: boolean;
+}
+
+let draftSeq = 0;
+const sumUsage = (a: Usage | undefined, b: Usage): Usage => a
+  ? { ...b, inputTokens: a.inputTokens + b.inputTokens, outputTokens: a.outputTokens + b.outputTokens, costUsd: a.costUsd + b.costUsd }
+  : b;
 
 const NEW_TITLE = "Новый чат";
 const newId = () => crypto.randomUUID();
@@ -128,7 +143,7 @@ class ChatController {
     });
     return {
       loaded: this.loaded, list: this.list, id: c.id, messages: c.messages, busy: c.busy, attached: c.attached,
-      subject: c.subject, tabs, storeError: this.storeError,
+      subject: c.subject, tabs, storeError: this.storeError, draft: c.draft,
     };
   }
   private emit() {
@@ -302,14 +317,20 @@ class ChatController {
    * A conversation that already discussed the same report text just comes to the front; a changed report
    * (an edited draft, a re-run analysis) is attached again.
    */
-  async openSubject(subject: ChatSubject, attachment: Omit<ChatAttachment, "id">) {
+  async openSubject(subject: ChatSubject, attachment: Omit<ChatAttachment, "id">, opts: OpenSubjectOptions = {}) {
     await this.load();
     const a = { ...attachment, id: newId() };
-    const known = [...this.convs.values()].find((c) => c.subject?.key === subject.key)?.id
-      ?? this.list.find((c) => c.subject?.key === subject.key)?.id;
+    const draft = opts.draft ? { text: opts.draft, seq: ++draftSeq } : undefined;
+    const known = opts.fresh
+      ? [...this.convs.values()].find((c) => c.subject?.key === subject.key && !c.messages.length && this.tabIds.includes(c.id))?.id
+      : [...this.convs.values()].find((c) => c.subject?.key === subject.key)?.id ?? this.list.find((c) => c.subject?.key === subject.key)?.id;
     if (known) {
       await this.open(known);
       const conv = this.convs.get(known);
+      if (conv && draft) {
+        conv.draft = draft;
+        this.emit();
+      }
       const seen = conv && [...conv.attached, ...conv.messages.flatMap((m) => m.attachments ?? [])].some((x) => x.text === a.text && x.quote === a.quote);
       if (conv && !seen) {
         conv.attached = [...conv.attached, a].slice(-8);
@@ -323,7 +344,7 @@ class ChatController {
       for (const id of this.tabIds.filter((t) => blank(this.convs.get(t)!))) this.convs.delete(id);
       this.tabIds = this.tabIds.filter((t) => this.convs.has(t));
     }
-    const conv: Conv = { id: newId(), title: subject.title, subject, messages: [], attached: [a], busy: false, open: true };
+    const conv: Conv = { id: newId(), title: subject.title, subject, messages: [], attached: [a], busy: false, open: true, draft };
     this.convs.set(conv.id, conv);
     if (this.tabbed) this.tabIds.push(conv.id);
     this.focus(conv.id);
@@ -358,7 +379,8 @@ class ChatController {
       for await (const ev of streamChat(this.channel, payload, conv.id, ac.signal)) {
         if (ev.type === "meta") patch((m) => ({ ...m, model: ev.model, tier: ev.tier }));
         else if (ev.type === "text") patch((m) => ({ ...m, content: m.content + ev.delta }));
-        else if (ev.type === "usage") patch((m) => ({ ...m, usage: ev.usage, tier: ev.tier }));
+        // An answer with browser steps calls the model several times: the usage adds up.
+        else if (ev.type === "usage") patch((m) => ({ ...m, usage: sumUsage(m.usage, ev.usage), tier: ev.tier }));
         else if (ev.type === "error") patch((m) => ({ ...m, error: ev.message }));
       }
     } catch (e) {
@@ -392,8 +414,8 @@ export const WORKBENCH_VIEW_EVENT = "trellis:workbench-view";
  * Sends a report to the big chat of «Рабочее место»: its own tab (the same tab next time), the report attached,
  * and the app switches to that chat.
  */
-export function openInWorkChat(subject: ChatSubject, attachment: Omit<ChatAttachment, "id">) {
-  void chatController("work").openSubject(subject, attachment);
+export function openInWorkChat(subject: ChatSubject, attachment: Omit<ChatAttachment, "id">, opts?: OpenSubjectOptions) {
+  void chatController("work").openSubject(subject, attachment, opts);
   try { localStorage.setItem(WORKBENCH_VIEW_KEY, "chat"); } catch { /* the workbench opens on its last view */ }
   dispatchEvent(new CustomEvent(WORKBENCH_VIEW_EVENT, { detail: "chat" }));
   location.hash = "/workbench";

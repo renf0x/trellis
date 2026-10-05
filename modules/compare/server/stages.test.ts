@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { DecisionQuestion, DocRecord, ModuleLlm, ServerModuleContext, TestCaseRecord } from "@trellis/core";
-import { extractRequirements, judgeCoverage, judgeQuality, parseQuality } from "./stages.ts";
+import { extractRequirements, judgeCaseDoc, judgeCoverage, judgeQuality, parseQuality } from "./stages.ts";
 import { register } from "./index.ts";
-import { coverageCandidates } from "./pairing.ts";
+import { caseDocCandidates, coverageCandidates, docChunks } from "./pairing.ts";
 
 const doc = (id: string, title: string, content: string): DocRecord => ({ id, source: "t", container: "W", path: `/${title}`, title, content });
 const kase = (id: string, title: string, action: string, expected: string): TestCaseRecord => ({
@@ -162,7 +162,7 @@ test("a staged run scores docs, measures coverage, keeps remark statuses and ski
     throw new Error("run did not finish");
   };
 
-  await call("POST", "/run", { body: { engine: "jev", stages: { pairs: false } } });
+  await call("POST", "/run", { body: { engine: "jev", stages: { pairs: false, casedocs: false } } });
   await finish();
   const quality = (await call("GET", "/quality")) as { items: { docId: string; verdict: { overall: number } }[] };
   assert.equal(quality.items.length, 2);
@@ -193,4 +193,53 @@ test("a staged run scores docs, measures coverage, keeps remark statuses and ski
   await assert.rejects(call("DELETE", "/remarks/:id", { params: { id: rem.items[0].id } }), /не удаляется/);
   const runs = (await call("GET", "/runs")) as { items: unknown[] };
   assert.equal(runs.items.length, 3);
+});
+
+test("docChunks splits by headings; caseDocCandidates finds the fragment a case is about", () => {
+  const chunks = docChunks([LOGIN, doc("d2", "Отчёты", "# Выгрузка\n- Отчёт выгружается в PDF\n# Печать\n- Отчёт печатается")]);
+  assert.deepEqual(chunks.map((c) => [c.docId, c.heading]), [["d1", "Вход в систему"], ["d2", "Выгрузка"], ["d2", "Печать"]]);
+  const cs = [kase("c1", "Выгрузка отчёта", "Нажать «Выгрузить в PDF»", "Отчёт выгружается в PDF"), kase("c2", "Корзина", "Добавить товар", "Товар в корзине")];
+  const [pdf, cart] = caseDocCandidates(cs, chunks);
+  assert.equal(chunks[pdf[0].chunk].heading, "Выгрузка");
+  assert.deepEqual(cart, []);
+});
+
+test("judgeCaseDoc: Jev picks the fragment; a partial description gets a chat comment", async () => {
+  const c = kase("c1", "Блокировка", "5 раз неверный пароль", "Блок на 15 минут");
+  const frags = [{ title: "Вход", text: "Пароль не менее 8 символов" }, { title: "Вход › Блокировка", text: "После 5 попыток блок на 15 минут" }];
+  const sure = fakeLlm({ choice: { documentation: "documented", fragment: "frag_2" } });
+  const v = await judgeCaseDoc(sure, c, frags, { engine: "jev", chat: true, threshold: 0.7 });
+  assert.deepEqual([v.status, v.fragment, sure.chats], ["documented", 1, 0]);
+  const partial = fakeLlm({ choice: { documentation: "partial", fragment: "frag_2" }, chatText: '{"status":"partial","fragment":"frag_2","confidence":0.8,"comment":"срок блокировки не описан"}' });
+  const p = await judgeCaseDoc(partial, c, frags, { engine: "jev", chat: true, threshold: 0.7 });
+  assert.deepEqual([p.status, p.comment, p.engine], ["partial", "срок блокировки не описан", "jev+chat"]);
+  const none = await judgeCaseDoc(fakeLlm({ choice: { documentation: "undocumented", fragment: "frag_1" } }), c, frags, { engine: "jev" });
+  assert.equal(none.fragment, undefined);
+});
+
+test("the casedocs stage lists cases without documentation for testcases-view", async () => {
+  const routes = new Map<string, Handler>();
+  const files = new Map<string, unknown>();
+  const cases = [
+    kase("c1", "Блокировка после неудачных попыток", "Ввести неверный пароль 5 раз", "Аккаунт блокируется на 15 минут"),
+    kase("c2", "Корзина", "Добавить товар в корзину", "Товар в корзине"),
+  ];
+  register({
+    route: (m: string, p: string, h: Handler) => void routes.set(`${m} ${p}`, h),
+    files: { read: async (n: string) => structuredClone(files.get(n) ?? null), write: async (n: string, v: unknown) => void files.set(n, structuredClone(v)) },
+    data: { docs: async () => [LOGIN], cases: async () => cases },
+    llm: fakeLlm({ choice: { documentation: "documented", fragment: "frag_1" } }),
+    log: () => {},
+  } as unknown as ServerModuleContext);
+  const call = (m: string, p: string, o: { params?: Record<string, string>; query?: Record<string, string>; body?: unknown } = {}) =>
+    routes.get(`${m} ${p}`)!({ params: o.params ?? {}, query: o.query ?? {}, body: o.body });
+  await call("POST", "/run", { body: { engine: "jev", stages: { quality: false, coverage: false, pairs: false } } });
+  for (let i = 0; i < 100 && ((await call("GET", "/status")) as { run: { running: boolean } }).run.running; i++) await new Promise((r) => setTimeout(r, 5));
+  const r = (await call("GET", "/case-docs")) as { at: string; summary: { documented: number; undocumented: number }; items: { caseId: string; status: string; reason?: string; doc?: { id: string } }[] };
+  assert.ok(r.at);
+  assert.deepEqual([r.summary.documented, r.summary.undocumented], [1, 1]);
+  assert.deepEqual(r.items.find((x) => x.caseId === "c2"), { ...r.items.find((x) => x.caseId === "c2"), status: "undocumented", reason: "no-candidates" });
+  assert.equal(r.items.find((x) => x.caseId === "c1")?.doc?.id, "d1");
+  const ctx = (await call("GET", "/case-docs/:caseId/context", { params: { caseId: "c2" } })) as { text: string };
+  assert.match(ctx.text, /не описан в документации/);
 });

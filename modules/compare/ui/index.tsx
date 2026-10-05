@@ -7,13 +7,20 @@ import { CoverageTab, QualityTab } from "./stages.tsx";
 type Engine = "chat" | "jev";
 type Kind = "contradicts" | "partial" | "outdated" | "uncertain" | "no-doc" | "no-case" | "error";
 type Status = "new" | "accepted" | "rejected";
-type Stage = "quality" | "coverage" | "pairs";
+type Stage = "quality" | "coverage" | "casedocs" | "pairs";
 type Tab = "findings" | "coverage" | "quality";
 const STAGES: { id: Stage; label: string; hint: string }[] = [
   { id: "quality", label: "Качество документации", hint: "Jev оценивает каждый документ: непротиворечивость, атомарность, проверяемость, полнота, однозначность" },
   { id: "coverage", label: "Покрытие требований", hint: "Требования выделяются из текста, Jev решает, каким кейсом каждое покрыто" },
+  { id: "casedocs", label: "Кейсы без документации", hint: "Для каждого кейса ищутся похожие фрагменты документации, Jev решает, описано ли то, что кейс проверяет. Результат — в «Тест-кейсы → Тесты без документации»" },
   { id: "pairs", label: "Сравнение пар", hint: "Кейс сверяется с похожим документом: противоречия и устаревшие шаги" },
 ];
+/** testcases-view opens on the view saved here. */
+const rememberView = (v: string) => {
+  try {
+    localStorage.setItem("trellis.testcases.view", v);
+  } catch { /* it just opens on the list */ }
+};
 const stageLabel = (s?: Stage) => STAGES.find((x) => x.id === s)?.label;
 
 interface Verdict {
@@ -46,6 +53,7 @@ interface StatusResponse {
   links: number;
   quality: number;
   coverage: { total: number; percent: number | null } | null;
+  caseDocs?: { undocumented: number; partial: number } | null;
 }
 interface Context { title: string; text: string }
 interface ArchiveItem { slot: string; seq: number; run: Run & { startedAt: string }; findings: number; coverage?: number | null }
@@ -85,9 +93,9 @@ export default function Compare({ api, navigate }: ModuleUiProps) {
   const [tab, setTab] = useState<Tab>("findings");
   const [stages, setStages] = useState<Record<Stage, boolean>>(() => {
     try {
-      return { quality: true, coverage: true, pairs: true, ...JSON.parse(localStorage.getItem("trellis.compare.stages") ?? "{}") };
+      return { quality: true, coverage: true, casedocs: true, pairs: true, ...JSON.parse(localStorage.getItem("trellis.compare.stages") ?? "{}") };
     } catch {
-      return { quality: true, coverage: true, pairs: true };
+      return { quality: true, coverage: true, casedocs: true, pairs: true };
     }
   });
   const toggleStage = (id: Stage, on: boolean) => {
@@ -162,7 +170,7 @@ export default function Compare({ api, navigate }: ModuleUiProps) {
   const { run: r, engines, data } = status;
   const current = items.find((f) => f.id === selected) ?? null;
   const noDocs = !data.docs;
-  const needCases = (stages.coverage || stages.pairs) && !data.cases;
+  const needCases = (stages.coverage || stages.casedocs || stages.pairs) && !data.cases;
   const noStage = !STAGES.some((s) => stages[s.id]);
 
   return (
@@ -218,9 +226,14 @@ export default function Compare({ api, navigate }: ModuleUiProps) {
           <span>Документов: {data.docs}</span>
           <span>Кейсов: {data.cases}</span>
           <span title="Пары подобраны по совпадению слов, без модели">Кандидатов в пары: {data.pairs}</span>
-          <span>Кейсов без документации: {data.orphanCases}</span>
+          <span title="Кейсы, у которых нет похожего документа по совпадению слов, без модели">Кейсов без похожего документа: {data.orphanCases}</span>
           <span>Документов без кейсов: {data.uncoveredDocs}</span>
           <span>Подтверждённых связей: {status.links}</span>
+          {status.caseDocs && (
+            <button onClick={() => (rememberView("nodocs"), navigate("testcases-view"))} className="text-accent" title="Открыть «Тест-кейсы → Тесты без документации»">
+              Тестов без документации: {status.caseDocs.undocumented}{status.caseDocs.partial ? `, частично: ${status.caseDocs.partial}` : ""}
+            </button>
+          )}
           {status.coverage && <span>Покрытие требований: {status.coverage.percent ?? "—"}{status.coverage.percent !== null && "%"} из {status.coverage.total}</span>}
         </div>
         </Block>

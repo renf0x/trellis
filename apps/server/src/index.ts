@@ -15,7 +15,7 @@ import {
   type RegistrySnapshot,
   type ServerModuleContext,
 } from "@trellis/core/node";
-import type { ChatChannel } from "@trellis/core";
+import type { ChatChannel, ChatTool } from "@trellis/core";
 import { LlmError } from "@trellis/llm";
 import { registerChats } from "./chats.ts";
 import { registerLlm } from "./llm.ts";
@@ -76,7 +76,14 @@ async function main() {
       .flatMap((m) => (m.manifest.chat ?? []).filter((c) => c.channel === channel && c.prompt).map((c) => c.prompt!.trim()))
       .join("\n\n");
   };
-  const llm = await registerLlm(app, dataDir, { chatPrompt });
+  // Tools modules offer to the chat model (ctx.chatTool); only enabled modules' tools are used.
+  const tools: { module: string; tool: ChatTool }[] = [];
+  const chatTools = async (channel: ChatChannel) => {
+    const snap = await loadModules(modulesDir, { disabled: await readDisabled() });
+    const on = new Set(snap.modules.filter((m) => m.enabled).map((m) => m.manifest.id));
+    return new Map(tools.filter((t) => on.has(t.module) && t.tool.channels.includes(channel)).map((t) => [t.tool.name, t.tool]));
+  };
+  const llm = await registerLlm(app, dataDir, { chatPrompt, chatTools });
   registerChats(app, dataDir);
 
   // Server entries are loaded once at start; manifests are re-read on each /api/modules call.
@@ -105,6 +112,12 @@ async function main() {
           await mkdir(filesDir, { recursive: true });
           await writeJson(safeName(name), value);
         },
+        dir: filesDir,
+      },
+      chatTool(tool) {
+        if (!/^[a-z][a-z0-9-]{1,30}$/.test(tool.name) || tool.name === "change") throw new Error(`bad chat tool name ${tool.name}`);
+        if (tools.some((t) => t.tool.name === tool.name)) throw new Error(`chat tool ${tool.name} is already registered`);
+        tools.push({ module: manifest.id, tool });
       },
       secrets: {
         get: async () => (await readJson<Record<string, string>>(secretFile)) ?? {},

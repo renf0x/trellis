@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { ClipboardPlus, CloudDownload, ExternalLink, MessageSquarePlus, Search, TriangleAlert, X } from "lucide-react";
+import { ClipboardPlus, CloudDownload, ExternalLink, MessageSquarePlus, Play, Search, TriangleAlert, X } from "lucide-react";
 import type { ModuleUiProps, SourceInfo, TestCaseRecord } from "@trellis/core";
 import { openInWorkChat } from "@trellis/ui";
+import { NoDocs, VIEW_KEY, type View } from "./nodocs.tsx";
 
 type Row = Omit<TestCaseRecord, "steps"> & { stepCount: number; noExpected: boolean };
 interface ListResponse { sources: SourceInfo[]; total: number; states: string[]; suites: string[]; items: Row[] }
@@ -14,7 +15,40 @@ function caseText(c: TestCaseRecord) {
   return `Тест-кейс (id: ${c.id})\n#${c.externalId} ${c.title}\nСтатус: ${c.state}\nНаборы: ${c.suites.join("; ")}\n\n${steps.join("\n") || "(нет шагов)"}`;
 }
 
+const URL_KEY = "trellis.testrun.url";
+const load = (key: string) => {
+  try { return localStorage.getItem(key); } catch { return null; }
+};
+const save = (key: string, value: string) => {
+  try { localStorage.setItem(key, value); } catch { /* storage blocked: only the choice is lost */ }
+};
+
+/** The prompt put into the chat for a run: the case itself goes as the attachment. */
+export function runPrompt(c: TestCaseRecord, url: string) {
+  const where = url ? `по адресу ${url}` : "(адрес не указан: возьми его из кейса, а если там нет — спроси у меня)";
+  return [
+    `Пройди тест-кейс #${c.externalId} «${c.title}» в браузере ${where}.`,
+    "",
+    "1. Сначала сверь вводные: адрес, предусловия, тестовые данные (логины, значения) и то, что видно на сайте. Если чего-то не хватает, "
+      + "данные не подходят к текущему сайту или шаг непонятен — сразу остановись, перечисли, что именно не так, и попроси актуальные данные. "
+      + "Свои данные не подставляй.",
+    "2. Проходи шаги по порядку: действия — блоками trellis-browser, ожидаемый результат каждого шага — через verify. "
+      + "После шага коротко: что сделал и что увидел.",
+    "3. Если элемента нет, страница выглядит иначе или результат не совпадает — зафиксируй это и сделай screenshot. "
+      + "Если следующие шаги от этого зависят, остановись и спроси, как продолжать.",
+    "",
+    "Итоговый отчёт:",
+    "- таблица «№ | действие | ожидается | факт | статус» (пройден / не пройден / заблокирован / не проверен);",
+    "- общий статус прогона;",
+    "- замечания: расхождения кейса с текущим сайтом, отсутствующие элементы, непонятные или неполные шаги, нехватка данных;",
+    "- что поправить в кейсе (если правка ясна — блоком trellis-change).",
+  ].join("\n");
+}
+
 export default function TestCasesView({ api, navigate }: ModuleUiProps) {
+  const [view, setView] = useState<View>(() => (load(VIEW_KEY) === "nodocs" ? "nodocs" : "all"));
+  const [noDocsCount, setNoDocsCount] = useState<number | null>(null);
+  const [runUrl, setRunUrl] = useState(() => load(URL_KEY) ?? "");
   const [q, setQ] = useState("");
   const [query, setQuery] = useState("");
   const [state, setState] = useState("");
@@ -37,6 +71,29 @@ export default function TestCasesView({ api, navigate }: ModuleUiProps) {
     api.get<TestCaseRecord>(`${base}/case?id=${encodeURIComponent(selected)}`).then(setDetail, (e: Error) => setError(e.message));
   }, [api, selected]);
 
+  useEffect(() => {
+    api.get<{ summary: { undocumented: number; partial: number } }>("/api/m/compare/case-docs").then(
+      (r) => setNoDocsCount(r.summary.undocumented + r.summary.partial), () => setNoDocsCount(null));
+  }, [api]);
+  const switchView = (v: View) => {
+    setView(v);
+    save(VIEW_KEY, v);
+  };
+
+  /** Opens a new tab of the workbench chat with the case attached and the run prompt in the input, not sent. */
+  async function runTest(c: TestCaseRecord) {
+    try {
+      await api.get("/api/m/test-runner/status");
+    } catch {
+      return setError("Модуль «Прогон тестов в браузере» выключен: включите его в настройках");
+    }
+    const url = runUrl.trim();
+    if (url && !/^https?:\/\//i.test(url)) return setError("Адрес должен начинаться с http:// или https://");
+    save(URL_KEY, url);
+    openInWorkChat({ kind: "run", key: `run:${c.id}`, title: `Прогон #${c.externalId} ${c.title}` },
+      { title: `Кейс #${c.externalId} ${c.title}`, text: caseText(c) }, { draft: runPrompt(c, url), fresh: true });
+  }
+
   /** Opens a draft edit of the case on the workbench (the existing draft, if there is one). */
   async function toWork(caseId: string) {
     try {
@@ -55,9 +112,19 @@ export default function TestCasesView({ api, navigate }: ModuleUiProps) {
   if (!data) return <p className="text-dim">{error ?? "Загрузка…"}</p>;
   if (!data.total) return <Empty navigate={navigate} />;
 
+  const tab = (v: View, label: string) => (
+    <button onClick={() => switchView(v)}
+      className={`rounded-md px-3 py-1.5 text-sm ${view === v ? "bg-raised text-ink" : "text-dim hover:text-ink"}`}>{label}</button>
+  );
+
   return (
     <div className="flex h-full min-h-0 gap-4">
       <section className="flex min-w-0 flex-1 flex-col rounded-xl border border-line bg-panel">
+        <nav className="flex gap-1 border-b border-line p-2">
+          {tab("all", `Все кейсы (${data.total})`)}
+          {tab("nodocs", `Тесты без документации${noDocsCount === null ? "" : ` (${noDocsCount})`}`)}
+        </nav>
+        {view === "nodocs" ? <NoDocs api={api} navigate={navigate} selected={selected} onSelect={setSelected} /> : <>
         <div className="flex flex-wrap gap-2 p-3">
           <label className={`${control} flex min-w-60 flex-1 items-center gap-2 text-dim`}>
             <Search size={15} />
@@ -110,6 +177,7 @@ export default function TestCasesView({ api, navigate }: ModuleUiProps) {
             </tbody>
           </table>
         </div>
+        </>}
       </section>
       {detail && (
         <aside className="w-[440px] shrink-0 overflow-auto rounded-xl border border-line bg-panel p-4">
@@ -136,6 +204,18 @@ export default function TestCasesView({ api, navigate }: ModuleUiProps) {
                 Открыть в источнике <ExternalLink size={12} />
               </a>
             )}
+          </div>
+          <div className="mt-3 rounded-lg border border-line p-2">
+            <div className="flex gap-2">
+              <input value={runUrl} onChange={(e) => setRunUrl(e.target.value)} placeholder="Адрес сайта для прогона (если изменился)"
+                className="h-8 min-w-0 flex-1 rounded-md border border-line bg-raised px-2 text-xs outline-none focus:border-accent" />
+              <button onClick={() => void runTest(detail)}
+                title="Новая вкладка чата «Рабочего места»: кейс приложен, задание на прохождение в поле ввода — проверьте и отправьте"
+                className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md bg-accent px-2 text-xs">
+                <Play size={12} /> Пройти тест
+              </button>
+            </div>
+            <div className="mt-1 text-[11px] text-faint">Агент пройдёт шаги в браузере (Edge, Chrome или другой Chromium) и напишет отчёт с замечаниями.</div>
           </div>
           {error && <p className="mt-2 text-xs text-bad">{error}</p>}
           <ol className="mt-4 space-y-3">

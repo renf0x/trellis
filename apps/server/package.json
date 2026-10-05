@@ -11,7 +11,8 @@
   "dependencies": {
     "@trellis/arbor-bridge": "*",
     "@trellis/core": "*",
+    "@trellis/llm": "*",
     "fastify": "^5.2.0",
-    "@trellis/llm": "*"
+    "playwright-core": "^1.63.0"
   }
 }

@@ -3,6 +3,7 @@ import { ChevronRight, Eraser, History, icons, Loader2, MessageSquarePlus, Paper
 import { channelBucket, type ChatActionDecl, type ChatChannel, type ModuleManifest } from "@trellis/core";
 import { ChangeCard, splitChanges } from "./ChangeCard.tsx";
 import { useChat, type ChatMsg as Msg } from "./chat-store.ts";
+import { splitToolBlocks, ToolCallLine, ToolResultLine } from "./ToolBlocks.tsx";
 import { modelLabel, type LlmSettingsResponse } from "./llm-client.ts";
 
 export interface ChatPanelProps {
@@ -60,7 +61,7 @@ function usageText(m: Msg) {
 export function ChatPanel({ channel, title, icon, intro, placeholder, compact, fill, tabs: tabbed, wide, api, navigate }: ChatPanelProps) {
   const bucket = channelBucket(channel);
   const [cfg, setCfg] = useState<LlmSettingsResponse | null>(null);
-  const { messages, busy, attached, list, id, loaded, storeError, tabs, subject, chat } = useChat(channel);
+  const { messages, busy, attached, list, id, loaded, storeError, tabs, subject, draft, chat } = useChat(channel);
   // Drafts are kept per conversation, so switching tabs does not mix questions.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const input = drafts[id] ?? "";
@@ -69,6 +70,10 @@ export function ChatPanel({ channel, title, icon, intro, placeholder, compact, f
   const [notice, setNotice] = useState<{ text: string; bad?: boolean } | null>(null);
   const [running, setRunning] = useState<string | null>(null);
   const actions = useChatActions(api, channel);
+  // A prompt put in by a button elsewhere (e.g. «Пройти тест») replaces what is typed in that conversation.
+  useEffect(() => {
+    if (draft) setDrafts((d) => ({ ...d, [id]: draft.text }));
+  }, [draft?.seq]); // eslint-disable-line react-hooks/exhaustive-deps
   const scroller = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -103,7 +108,7 @@ export function ChatPanel({ channel, title, icon, intro, placeholder, compact, f
 
   const label = modelLabel(cfg?.settings[bucket]);
   const height = fill ? "h-full min-h-0" : compact ? "h-[560px]" : "h-[calc(100vh-120px)]";
-  const kind: Record<string, string> = { finding: "Находка", requirement: "Требование", doc: "Документ", case: "Кейс", remark: "Замечание", draft: "Черновик" };
+  const kind: Record<string, string> = { finding: "Находка", requirement: "Требование", doc: "Документ", case: "Кейс", remark: "Замечание", draft: "Черновик", run: "Прогон" };
   const ready = !!label;
   const send = () => {
     if (busy || (!input.trim() && !attached.length)) return;
@@ -192,7 +197,9 @@ export function ChatPanel({ channel, title, icon, intro, placeholder, compact, f
         {storeError && <div className="rounded-lg border border-bad/40 p-2 text-xs text-bad">{storeError}</div>}
         {messages.length === 0 && (
           <div className="rounded-lg bg-raised p-3 text-dim">
-            {subject ? <>Вкладка по отчёту «{subject.title}». Контекст приложен ниже: задайте вопрос или отправьте как есть.</> : intro}
+            {subject?.kind === "run"
+              ? <>{subject.title}. Кейс приложен, задание в поле ввода: проверьте адрес и данные, затем отправьте. Агент откроет браузер и будет проходить шаги, результаты появятся здесь.</>
+              : subject ? <>Вкладка по отчёту «{subject.title}». Контекст приложен ниже: задайте вопрос или отправьте как есть.</> : intro}
           </div>
         )}
         {messages.map((m, i) => (
@@ -207,7 +214,10 @@ export function ChatPanel({ channel, title, icon, intro, placeholder, compact, f
               <div className="whitespace-pre-wrap break-words">
                 {m.content
                   ? m.role === "assistant"
-                    ? splitChanges(m.content).map((seg, k) => (seg.kind === "change" ? <ChangeCard key={k} raw={seg.raw} /> : <span key={k}>{seg.text}</span>))
+                    ? splitChanges(m.content).map((seg, k) => (seg.kind === "change" ? <ChangeCard key={k} raw={seg.raw} /> : (
+                      splitToolBlocks(seg.text).map((t, j) => t.kind === "call" ? <ToolCallLine key={`${k}.${j}`} tool={t.tool} raw={t.raw} />
+                        : t.kind === "result" ? <ToolResultLine key={`${k}.${j}`} raw={t.raw} /> : <span key={`${k}.${j}`}>{t.text}</span>)
+                    )))
                     : m.content
                   : busy && i === messages.length - 1 && !m.error ? <span className="text-faint">думает…</span> : null}
               </div>
@@ -248,7 +258,7 @@ export function ChatPanel({ channel, title, icon, intro, placeholder, compact, f
         )}
         <div className="flex items-end gap-2 rounded-lg border border-line bg-raised p-2">
           <textarea
-            rows={wide ? 3 : 2}
+            rows={Math.min(12, Math.max(wide ? 3 : 2, input.split("\n").length))}
             value={input}
             disabled={!ready}
             onChange={(e) => setInput(e.target.value)}

@@ -14,10 +14,12 @@ import {
   type ChatChannel,
   type ChatChunk,
   type ChatMessage,
+  type ChatTool,
   type CostTier,
   type ModuleLlm,
   type UsageBucket,
 } from "@trellis/core";
+import { withTools } from "./chat-tools.ts";
 import {
   buildAuthorizeUrl,
   chatGptChat,
@@ -106,9 +108,13 @@ function str(v: unknown, field: string, max = 200): string {
 const analysisDefaults = (): AnalysisSettings => ({ jev: { enabled: false, model: JEV_DEFAULT_MODEL, threshold: 0.7 } });
 
 /** Registers /api/llm routes and returns the service module servers get as ctx.llm. */
-/** `chatPrompt` adds text from enabled modules (their manifest `chat` entries) to a chat's system prompt. */
+/** `chatPrompt` adds text from enabled modules (their manifest `chat` entries) to a chat's system prompt;
+ * `chatTools` are the tools enabled modules offer to the chat model (ctx.chatTool). */
 export async function registerLlm(app: FastifyInstance, dataDir: string,
-  extras: { chatPrompt?: (channel: ChatChannel) => Promise<string> } = {}): Promise<ModuleLlm> {
+  extras: {
+    chatPrompt?: (channel: ChatChannel) => Promise<string>;
+    chatTools?: (channel: ChatChannel) => Promise<Map<string, ChatTool>>;
+  } = {}): Promise<ModuleLlm> {
   const secretsDir = join(dataDir, "secrets");
   await mkdir(secretsDir, { recursive: true });
   const settingsFile = join(dataDir, "config", "llm.json");
@@ -364,6 +370,7 @@ export async function registerLlm(app: FastifyInstance, dataDir: string,
   app.post("/api/llm/chat", async (req, reply) => {
     const { channel, bucket, messages, sessionId } = parseChat(req.body);
     const extra = (await extras.chatPrompt?.(channel).catch(() => "")) ?? "";
+    const tools = (await extras.chatTools?.(channel).catch(() => null)) ?? new Map<string, ChatTool>();
     const system = extra ? `${SYSTEM[channel]}\n\n${extra}` : SYSTEM[channel];
     const ac = new AbortController();
     reply.raw.on("close", () => ac.abort());
@@ -371,7 +378,8 @@ export async function registerLlm(app: FastifyInstance, dataDir: string,
     reply.raw.writeHead(200, { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-cache" });
     const send = (obj: unknown) => reply.raw.write(JSON.stringify(obj) + "\n");
     try {
-      for await (const chunk of runChat(bucket, messages, ac.signal, sessionId, { system })) send(chunk);
+      const step = (convo: ChatMessage[]) => runChat(bucket, convo, ac.signal, sessionId, { system });
+      for await (const chunk of withTools(messages, tools, sessionId, ac.signal, step)) send(chunk);
     } catch (err) {
       if (!ac.signal.aborted) {
         const e = err as Error & { status?: number };

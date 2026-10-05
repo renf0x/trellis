@@ -1,16 +1,21 @@
 import { createHash } from "node:crypto";
 import { HttpError, type DocRecord, type ServerModuleContext, type TestCaseRecord } from "@trellis/core";
 import { caseForModel, docForModel, judgeWithChat, judgeWithJev, type PairVerdict } from "./engines.ts";
-import { coverageCandidates, pairUp, type Candidate } from "./pairing.ts";
-import { extractRequirements, judgeCoverage, judgeQuality, type Coverage, type CoverageVerdict, type Criterion, type QualityVerdict } from "./stages.ts";
+import { caseDocCandidates, coverageCandidates, docChunks, pairUp, type Candidate, type DocChunk, type Fragment } from "./pairing.ts";
+import {
+  extractRequirements, judgeCaseDoc, judgeCoverage, judgeQuality,
+  type CaseDocStatus, type CaseDocVerdict, type Coverage, type CoverageVerdict, type Criterion, type QualityVerdict,
+} from "./stages.ts";
 
 type Engine = "chat" | "jev";
 type Kind = "contradicts" | "partial" | "outdated" | "uncertain" | "no-doc" | "no-case" | "error";
 type Status = "new" | "accepted" | "rejected";
-/** Run order: document quality → requirement coverage → doc ↔ case pairs. Each can be switched off. */
-type Stage = "quality" | "coverage" | "pairs";
-const STAGES: Stage[] = ["quality", "coverage", "pairs"];
-const STAGE_TITLE: Record<Stage, string> = { quality: "Качество документации", coverage: "Покрытие требований", pairs: "Сравнение пар" };
+/** Run order: document quality → requirement coverage → cases without docs → doc ↔ case pairs. Each can be switched off. */
+type Stage = "quality" | "coverage" | "casedocs" | "pairs";
+const STAGES: Stage[] = ["quality", "coverage", "casedocs", "pairs"];
+const STAGE_TITLE: Record<Stage, string> = {
+  quality: "Качество документации", coverage: "Покрытие требований", casedocs: "Кейсы без документации", pairs: "Сравнение пар",
+};
 
 interface Finding {
   id: string;
@@ -40,6 +45,20 @@ interface Requirement {
   verdict?: CoverageVerdict;
   error?: string;
 }
+/** Whether the documentation describes what a test case checks. */
+interface CaseDoc {
+  caseId: string;
+  /** "unchecked": over the run limit. */
+  status: CaseDocStatus | "unchecked" | "error";
+  /** "no-candidates": no doc fragment looked related, so no model checked it. */
+  reason?: "no-candidates";
+  /** The fragment that describes the case best, or the most similar one when the case is undocumented. */
+  docId?: string;
+  heading?: string;
+  similarity?: number;
+  verdict?: CaseDocVerdict;
+  error?: string;
+}
 interface Run {
   engine: Engine;
   running: boolean;
@@ -58,6 +77,7 @@ interface State {
   links: Link[];
   quality?: DocQuality[];
   requirements?: Requirement[];
+  caseDocs?: CaseDoc[];
   /** When each stage's results were made; a stage switched off keeps the results of an earlier run. */
   stageAt?: Partial<Record<Stage, string>>;
 }
@@ -106,6 +126,14 @@ export function coverageSummary(reqs: Requirement[]) {
     total: reqs.length, checked, covered, partial, notCovered, unchecked: n("unchecked"), errors: n("error"),
     percent: checked ? Math.round((covered / checked) * 100) : null,
     partialPercent: checked ? Math.round((partial / checked) * 100) : null,
+  };
+}
+
+export function caseDocSummary(items: CaseDoc[]) {
+  const n = (s: CaseDoc["status"]) => items.filter((x) => x.status === s).length;
+  return {
+    total: items.length, documented: n("documented"), partial: n("partial"), undocumented: n("undocumented"),
+    unchecked: n("unchecked"), errors: n("error"),
   };
 }
 
@@ -185,6 +213,7 @@ export function register(ctx: ServerModuleContext) {
       links: state.links.length,
       quality: state.quality?.length ?? 0,
       coverage: state.requirements ? coverageSummary(state.requirements) : null,
+      caseDocs: state.caseDocs ? caseDocSummary(state.caseDocs) : null,
       stageAt: state.stageAt ?? {},
     };
   });
@@ -231,11 +260,29 @@ export function register(ctx: ServerModuleContext) {
       });
     }
     const toJudge = requirements.filter((r) => candidates.has(r.id)).slice(0, limit);
+    // Cases without documentation: doc fragments by similarity; none at all means undocumented for free.
+    // Cases with no paired document go first, they are the likeliest to be undocumented.
+    const caseDocs: CaseDoc[] = [];
+    const fragments = new Map<string, Fragment[]>();
+    let chunks: DocChunk[] = [];
+    if (stages.includes("casedocs")) {
+      chunks = docChunks(docs);
+      const orphan = new Set(p.orphanCases);
+      const byCase = [...cases.filter((c) => orphan.has(c.id)), ...cases.filter((c) => !orphan.has(c.id))];
+      const top = caseDocCandidates(byCase, chunks);
+      byCase.forEach((c, i) => {
+        const best = top[i][0];
+        if (!best) return void caseDocs.push({ caseId: c.id, status: "undocumented", reason: "no-candidates" });
+        fragments.set(c.id, top[i]);
+        caseDocs.push({ caseId: c.id, status: "unchecked", docId: chunks[best.chunk].docId, heading: chunks[best.chunk].heading, similarity: best.similarity });
+      });
+    }
+    const caseDocsToJudge = caseDocs.filter((x) => fragments.has(x.caseId)).slice(0, limit);
     const pairs = stages.includes("pairs") ? p.pairs.slice(0, limit) : [];
 
     const run: Run = {
       engine, running: true, startedAt: runAt, stages, stage: stages[0],
-      total: qualityDocs.length + toJudge.length + pairs.length, done: 0, costUsd: 0, message: STAGE_TITLE[stages[0]],
+      total: qualityDocs.length + toJudge.length + caseDocsToJudge.length + pairs.length, done: 0, costUsd: 0, message: STAGE_TITLE[stages[0]],
     };
     abort = new AbortController();
     const signal = abort.signal;
@@ -258,7 +305,7 @@ export function register(ctx: ServerModuleContext) {
     };
 
     void (async () => {
-      const next: State = { run, findings: prev.findings, links: prev.links, quality: prev.quality, requirements: prev.requirements, stageAt: { ...prev.stageAt } };
+      const next: State = { run, findings: prev.findings, links: prev.links, quality: prev.quality, requirements: prev.requirements, caseDocs: prev.caseDocs, stageAt: { ...prev.stageAt } };
 
       if (stages.includes("quality")) {
         run.stage = "quality";
@@ -306,6 +353,32 @@ export function register(ctx: ServerModuleContext) {
         next.stageAt!.coverage = runAt;
       }
 
+      if (stages.includes("casedocs") && !signal.aborted) {
+        run.stage = "casedocs";
+        run.message = STAGE_TITLE.casedocs;
+        const chatToo = engine === "jev" && explain && !!chat;
+        await pool(caseDocsToJudge, workers, signal, async (x) => {
+          const c = caseById.get(x.caseId)!;
+          const list = fragments.get(x.caseId)!;
+          const frags = list.map((f) => {
+            const ch = chunks[f.chunk];
+            return { title: `${docById.get(ch.docId)?.title ?? ch.docId}${ch.heading ? ` › ${ch.heading}` : ""}`, text: ch.text };
+          });
+          try {
+            const v = await cached(hash("casedocs", engine, String(chatToo), String(threshold), caseForModel(c), ...frags.map((f) => `${f.title}\n${f.text}`)),
+              () => judgeCaseDoc(ctx.llm, c, frags, { engine, chat: chatToo, threshold, signal }));
+            const best = chunks[list[v.fragment ?? 0].chunk];
+            Object.assign(x, { status: v.status, verdict: v, docId: best.docId, heading: best.heading, similarity: list[v.fragment ?? 0].similarity });
+          } catch (err) {
+            if (!signal.aborted) Object.assign(x, { status: "error", error: (err as Error).message });
+            failed(err);
+          }
+          run.done++;
+        });
+        next.caseDocs = caseDocs;
+        next.stageAt!.casedocs = runAt;
+      }
+
       if (stages.includes("pairs") && !signal.aborted) {
         run.stage = "pairs";
         run.message = STAGE_TITLE.pairs;
@@ -347,6 +420,10 @@ export function register(ctx: ServerModuleContext) {
       if (stages.includes("coverage") && next.requirements === requirements) {
         const s = coverageSummary(requirements);
         parts.push(`требований: ${s.total}, покрыто ${s.percent ?? 0}% проверенных`);
+      }
+      if (stages.includes("casedocs") && next.caseDocs === caseDocs) {
+        const s = caseDocSummary(caseDocs);
+        parts.push(`кейсов без документации: ${s.undocumented}, частично: ${s.partial}`);
       }
       if (stages.includes("pairs") && next.stageAt?.pairs === runAt) parts.push(`находок: ${next.findings.length}, связей: ${next.links.length}`);
       run.message = `${signal.aborted ? `Остановлено. ${stopReason ? `${stopReason} ` : ""}` : ""}${parts.join("; ") || "Ничего не проверено"}`;
@@ -488,6 +565,36 @@ export function register(ctx: ServerModuleContext) {
     if (d) lines.push("", `## Документация (id: ${d.id})`, docForModel(d));
     if (c) lines.push("", `## Ближайший тест-кейс (id: ${c.id})`, caseForModel(c));
     return { title: `Требование: ${r.text.slice(0, 60)}`, text: lines.join("\n") };
+  });
+
+  // Cases the documentation does not describe; testcases-view shows them as «Тесты без документации».
+  ctx.route("GET", "/case-docs", async ({ query }) => {
+    const s = await stateOf(query.run);
+    const { docById, caseById } = await load();
+    const items = (s.caseDocs ?? []).filter((x) => caseById.has(x.caseId)); // cases deleted since the run drop out
+    return {
+      at: s.stageAt?.casedocs ?? null,
+      summary: caseDocSummary(items),
+      items: items
+        .filter((x) => !query.status || x.status === query.status)
+        .map((x) => ({ ...x, case: caseRef(caseById.get(x.caseId)), doc: docRef(x.docId ? docById.get(x.docId) : undefined) })),
+    };
+  });
+
+  ctx.route("GET", "/case-docs/:caseId/context", async ({ params, query }) => {
+    const x = (await stateOf(query.run)).caseDocs?.find((i) => i.caseId === params.caseId);
+    if (!x) throw new HttpError(404, "Кейс не проверялся на документацию");
+    const { docById, caseById } = await load();
+    const c = caseById.get(x.caseId);
+    const d = x.docId ? docById.get(x.docId) : undefined;
+    const label: Record<CaseDoc["status"], string> = {
+      documented: "описан в документации", partial: "описан частично", undocumented: "не описан в документации", unchecked: "не проверен", error: "ошибка проверки",
+    };
+    const lines = [`Проверка «Тесты без документации»: кейс ${label[x.status]}${x.reason === "no-candidates" ? " (похожих фрагментов документации не нашлось, модель не проверяла)" : ""}.`];
+    if (x.verdict?.comment) lines.push(`Комментарий: ${x.verdict.comment}`);
+    if (c) lines.push("", `## Тест-кейс (id: ${c.id})`, caseForModel(c));
+    if (d) lines.push("", `## Ближайшая документация (id: ${d.id})${x.heading ? `, раздел «${x.heading}»` : ""}`, docForModel(d));
+    return { title: c ? `#${c.externalId} ${c.title}` : x.caseId, text: lines.join("\n") };
   });
 
   // ── Documentation remarks ──

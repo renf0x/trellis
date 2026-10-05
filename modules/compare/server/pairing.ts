@@ -143,3 +143,58 @@ export function coverageCandidates(reqs: { docId: string; text: string; section?
     return out;
   });
 }
+
+export interface DocChunk { docId: string; heading: string; text: string }
+
+/**
+ * Splits documents into fragments by headings, at most `max` chars each, so a case is matched with the part
+ * of a long document it is about rather than with the whole text.
+ */
+export function docChunks(docs: DocRecord[], max = 1500): DocChunk[] {
+  const out: DocChunk[] = [];
+  for (const d of docs) {
+    let heading = "";
+    let buf: string[] = [];
+    let size = 0;
+    const flush = () => {
+      const text = buf.join("\n").trim();
+      if (text) out.push({ docId: d.id, heading, text });
+      buf = [];
+      size = 0;
+    };
+    for (const line of d.content.split("\n")) {
+      const h = /^\s*#+\s*(.*)$/.exec(line);
+      if (h) {
+        flush();
+        heading = h[1].replace(/[*_`]+/g, "").trim();
+      }
+      if (size + line.length > max && buf.length) flush();
+      buf.push(line.length > max ? line.slice(0, max) : line);
+      size += line.length + 1;
+    }
+    flush();
+  }
+  return out;
+}
+
+export interface Fragment { chunk: number; similarity: number }
+
+/**
+ * Documentation fragments that may describe each case, best first, at most `k`, at most two per document
+ * so one long document does not crowd out the others. An empty list: nothing in the docs looks related.
+ */
+export function caseDocCandidates(cases: TestCaseRecord[], chunks: DocChunk[], k = 4, min = 0.08): Fragment[][] {
+  const top = similar(cases.map(caseText), chunks.map((c) => `${c.heading}\n${c.text}`), k * 4, min);
+  return top.map((list) => {
+    const perDoc = new Map<string, number>();
+    const out: Fragment[] = [];
+    for (const t of list) {
+      const doc = chunks[t.target].docId;
+      if ((perDoc.get(doc) ?? 0) >= 2) continue;
+      perDoc.set(doc, (perDoc.get(doc) ?? 0) + 1);
+      out.push({ chunk: t.target, similarity: t.similarity });
+      if (out.length >= k) break;
+    }
+    return out;
+  });
+}

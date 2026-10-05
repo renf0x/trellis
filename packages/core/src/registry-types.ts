@@ -1,4 +1,4 @@
-import type { ModuleLlm } from "./llm.ts";
+import type { ChatChannel, ModuleLlm } from "./llm.ts";
 import type { ManifestIssue, ModuleManifest } from "./manifest.ts";
 
 export interface LoadedModule {
@@ -102,6 +102,25 @@ export class HttpError extends Error {
   }
 }
 
+/**
+ * A tool the chat model can use: it writes a ```trellis-<name> block with one JSON object, the server runs the tool
+ * and gives the result back to the model in the same answer. `summary` stays in the conversation;
+ * `detail` (a page snapshot, say) goes only to the model's next step, so later turns do not carry it.
+ */
+export interface ChatTool {
+  /** Lowercase, e.g. "browser" → ```trellis-browser. */
+  name: string;
+  channels: ChatChannel[];
+  run(input: Record<string, unknown>, call: { sessionId: string; signal: AbortSignal }): Promise<ChatToolResult>;
+}
+export interface ChatToolResult {
+  ok: boolean;
+  summary: string;
+  detail?: string;
+  /** A screenshot or another file the chat shows by link: "/api/m/<module>/…". */
+  image?: string;
+}
+
 /** Handed to a module's server entry `register(ctx)`. Framework-neutral on purpose. */
 export interface ServerModuleContext {
   manifest: ModuleManifest;
@@ -116,6 +135,8 @@ export interface ServerModuleContext {
   files: {
     read<T>(name: string): Promise<T | null>;
     write(name: string, value: unknown): Promise<void>;
+    /** Absolute path of that folder, for files that are not JSON (screenshots, a browser profile). */
+    dir: string;
   };
   /** Module secrets in data/secrets/modules/<id>.json; never send them to the browser. */
   secrets: {
@@ -125,6 +146,8 @@ export interface ServerModuleContext {
   };
   /** Main chat model and Jev for batch work; needs llm:main. */
   llm: ModuleLlm;
+  /** Offers a tool to the chat model while the module is enabled. */
+  chatTool(tool: ChatTool): void;
   log(message: string): void;
 }
 

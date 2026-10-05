@@ -37,3 +37,17 @@ test("pageVerdict asks Jev one choice question about the page", async () => {
   assert.equal(state.expected_result, "Открыт личный кабинет");
   assert.equal(state.page.url, snap.url);
 });
+
+test("formatSnapshot shows the emulated screen, sideways overflow and console counts", () => {
+  const s = formatSnapshot({
+    ...snap, screen: "360×800, мобильная версия", notes: ["открылась новая вкладка, дальше действия в ней"],
+    layout: { width: 360, overflow: 140, wide: ["table.prices (правый край 500 px)"] },
+    console: { errors: 2, warnings: 0, failed: 1 },
+  }, 100);
+  assert.match(s, /Экран: 360×800, мобильная версия/);
+  assert.match(s, /шире экрана на 140 px \(ширина 360 px\).*table\.prices/);
+  assert.match(s, /Консоль: ошибок 2, предупреждений 0, неудачных запросов 1/);
+  assert.match(s, /Вкладки: открылась новая вкладка/);
+  const plain = formatSnapshot({ ...snap, layout: { width: 1280, overflow: 0, wide: [] }, console: { errors: 0, warnings: 0, failed: 0 } }, 100);
+  assert.doesNotMatch(plain, /Экран|Вёрстка|Консоль/);
+});

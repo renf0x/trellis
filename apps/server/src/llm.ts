@@ -19,7 +19,7 @@ import {
   type ModuleLlm,
   type UsageBucket,
 } from "@trellis/core";
-import { withTools } from "./chat-tools.ts";
+import { idleGuard, STEP_IDLE_MS, withTools } from "./chat-tools.ts";
 import {
   buildAuthorizeUrl,
   chatGptChat,
@@ -439,7 +439,9 @@ export async function registerLlm(app: FastifyInstance, dataDir: string,
     reply.raw.writeHead(200, { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-cache" });
     const send = (obj: unknown) => reply.raw.write(JSON.stringify(obj) + "\n");
     try {
-      const step = (convo: ChatMessage[]) => runChat(bucket, convo, ac.signal, sessionId, { system });
+      // A stream that goes silent ends with a readable error instead of an endless "typing".
+      const step = (convo: ChatMessage[]) =>
+        idleGuard(STEP_IDLE_MS, (idle) => runChat(bucket, convo, AbortSignal.any([ac.signal, idle]), sessionId, { system }));
       for await (const chunk of withTools(messages, tools, sessionId, ac.signal, step)) send(chunk);
     } catch (err) {
       if (!ac.signal.aborted) {

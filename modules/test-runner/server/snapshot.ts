@@ -15,7 +15,15 @@ export interface Snapshot {
   title: string;
   elements: SnapshotElement[];
   text: string;
+  /** The emulated screen, e.g. "360×800, мобильная версия"; absent for the window's own size. */
+  screen?: string;
   dialogs?: string[];
+  /** Tab changes: a link opened a new tab, a tab closed. */
+  notes?: string[];
+  /** Page width in CSS px and how far the content sticks out sideways, with the widest elements. */
+  layout?: { width: number; overflow: number; wide: string[] };
+  /** Console errors and warnings, failed requests since the last snapshot (counts only; details via `console`). */
+  console?: { errors: number; warnings: number; failed: number };
   errors?: string[];
 }
 
@@ -29,6 +37,16 @@ function kind(e: SnapshotElement) {
 /** Compact text: numbered elements first (what the model acts on), then the page text cut to `textLimit`. */
 export function formatSnapshot(s: Snapshot, textLimit: number): string {
   const lines = [`URL: ${s.url}`, `Заголовок: ${s.title || "—"}`];
+  if (s.screen) lines.push(`Экран: ${s.screen}`);
+  if (s.layout?.overflow) {
+    lines.push(`Вёрстка: страница шире экрана на ${s.layout.overflow} px (ширина ${s.layout.width} px), есть горизонтальная прокрутка`
+      + (s.layout.wide.length ? `; выходят за край: ${s.layout.wide.join(", ")}` : ""));
+  }
+  const c = s.console;
+  if (c && (c.errors || c.warnings || c.failed)) {
+    lines.push(`Консоль: ошибок ${c.errors}, предупреждений ${c.warnings}, неудачных запросов ${c.failed} (подробно — action console)`);
+  }
+  if (s.notes?.length) lines.push(`Вкладки: ${s.notes.join("; ")}`);
   if (s.dialogs?.length) lines.push(`Диалоги: ${s.dialogs.join("; ")}`);
   if (s.errors?.length) lines.push(`Ошибки JS на странице: ${s.errors.join("; ")}`);
   lines.push("", s.elements.length ? "Элементы [ref]:" : "Интерактивных элементов не видно.");

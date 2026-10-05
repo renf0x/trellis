@@ -40,11 +40,13 @@ export function toCase(host: string, code: string, c: QaseCase, paths: Map<numbe
   const pre = c.preconditions?.trim();
   const steps = flattenSteps(c.steps).map((s) => ({ kind: "step" as const, ...s }));
   const p = priorityOf(c.priority);
+  const description = c.description?.trim();
   return {
     id: `${SOURCE}:${code}-${c.id}`, source: SOURCE, externalId: `${code}-${c.id}`, title: c.title,
     state: c.status === undefined || c.status === null ? "" : (STATUS[String(c.status)] ?? String(c.status)),
     ...(p ? { priority: p } : {}),
     suites: [c.suite_id && paths.get(c.suite_id) ? `${code} / ${paths.get(c.suite_id)}` : code],
+    ...(description ? { description } : {}),
     steps: pre ? [{ kind: "step", action: `Предусловие: ${pre}`, expected: "" }, ...steps] : steps,
     url: caseUrl(host, code, c.id),
   };

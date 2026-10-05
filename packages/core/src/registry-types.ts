@@ -64,6 +64,8 @@ export interface TestCaseRecord {
   priority?: number;
   /** "Plan / Suite / Sub-suite" for every suite that contains the case. */
   suites: string[];
+  /** Free text of the case (Qase description): screen sizes, environments and other conditions live here. */
+  description?: string;
   steps: TestStepRecord[];
   url?: string;
 }

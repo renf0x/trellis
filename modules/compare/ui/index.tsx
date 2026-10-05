@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Bot, Check, ExternalLink, MessageSquarePlus, Play, Settings, Sparkles, Square, Undo2, X } from "lucide-react";
 import type { ModuleUiProps } from "@trellis/core";
-import { Block, sendToChat } from "@trellis/ui";
+import { Block, openInWorkChat } from "@trellis/ui";
 import { CoverageTab, QualityTab } from "./stages.tsx";
 
 type Engine = "chat" | "jev";
@@ -150,8 +150,9 @@ export default function Compare({ api, navigate }: ModuleUiProps) {
   async function toChat(f: Finding, quote?: string) {
     try {
       const ctx = await api.get<Context>(`${base}/findings/${f.id}/context${past ? `?run=${past}` : ""}`);
-      sendToChat("main", { title: `${kindOf(f.kind).label}: ${ctx.title}`, text: ctx.text, quote });
-      setToast(quote ? "Фрагмент добавлен в чат агента" : "Отчёт добавлен в чат агента");
+      // Its own tab in the workbench chat; the app switches there.
+      openInWorkChat({ kind: "finding", key: `finding:${f.id}`, title: ctx.title },
+        { title: `${kindOf(f.kind).label}: ${ctx.title}`, text: ctx.text, quote });
     } catch (e) {
       setError((e as Error).message);
     }
@@ -302,7 +303,7 @@ export default function Compare({ api, navigate }: ModuleUiProps) {
             <Report key={`${past}/${current.id}`} f={current} api={api} past={past} onChat={toChat} onStatus={past ? undefined : setFindingStatus} />
           ) : (
             <p className="p-6 text-sm text-faint">
-              Выберите находку слева. Отчёт или выделенный в нём фрагмент можно отправить в чат агента справа и задать уточняющие вопросы.
+              Выберите находку слева. Кнопка «В чат» откроет отчёт (или выделенный в нём фрагмент) отдельной вкладкой в чате «Рабочего места»: там можно задать уточняющие вопросы.
             </p>
           )}
         </section>

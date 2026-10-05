@@ -1,11 +1,11 @@
-// Saved chat conversations: data/chats/<bucket>/<id>.json, one file per conversation.
+// Saved chat conversations: data/chats/<channel>/<id>.json, one file per conversation.
 // The UI keeps several conversations per chat; "new chat" starts another file, older ones stay.
+// The workbench chat ("work") also keeps which conversations are open as tabs and what report each is about.
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
-import { HttpError, type ChatBucket } from "@trellis/core";
+import { CHAT_CHANNELS, HttpError, type ChatChannel } from "@trellis/core";
 
-const BUCKETS: ChatBucket[] = ["main", "dev"];
 const ID_RE = /^[\w-]{1,64}$/;
 const MAX_MESSAGES = 400;
 const MAX_BYTES = 4_000_000;
@@ -20,13 +20,28 @@ export interface StoredConversation {
   updatedAt: string;
   /** Messages as the UI shows them; the server only checks shape and size. */
   messages: Record<string, unknown>[];
+  /** The report the conversation is about (a finding, a requirement, a case…); one conversation per key. */
+  subject?: ChatSubject;
+  /** Shown as a tab (workbench chat); a closed tab stays in the history. */
+  open?: boolean;
+  /** Context attached but not sent yet, so a fresh tab keeps it over a reload. */
+  pending?: Record<string, unknown>[];
 }
-export type ConversationMeta = Pick<StoredConversation, "id" | "title" | "createdAt" | "updatedAt"> & { count: number };
+export interface ChatSubject { kind: string; key: string; title: string }
+export type ConversationMeta = Pick<StoredConversation, "id" | "title" | "createdAt" | "updatedAt" | "subject" | "open"> & { count: number };
 
+type Channel = ChatChannel;
 const bucketOf = (b: string) => {
-  if (!BUCKETS.includes(b as ChatBucket)) throw new HttpError(400, "unknown bucket");
-  return b as ChatBucket;
+  if (!CHAT_CHANNELS.includes(b as Channel)) throw new HttpError(400, "unknown chat");
+  return b as Channel;
 };
+function subjectOf(v: unknown): ChatSubject | undefined {
+  if (v === undefined || v === null) return undefined;
+  const o = v as Record<string, unknown>;
+  const ok = (x: unknown, max: number) => typeof x === "string" && x.trim().length > 0 && x.length <= max;
+  if (typeof v !== "object" || !ok(o.kind, 40) || !ok(o.key, 200) || !ok(o.title, 200)) throw new HttpError(400, "bad subject");
+  return { kind: o.kind as string, key: o.key as string, title: (o.title as string).trim() };
+}
 const idOf = (id: string) => {
   if (!ID_RE.test(id)) throw new HttpError(400, "bad chat id");
   return id;
@@ -35,11 +50,11 @@ const idOf = (id: string) => {
 export class ChatStore {
   constructor(private readonly dir: string) {}
 
-  private file(bucket: ChatBucket, id: string) {
+  private file(bucket: Channel, id: string) {
     return join(this.dir, bucket, `${id}.json`);
   }
 
-  async get(bucket: ChatBucket, id: string): Promise<StoredConversation | null> {
+  async get(bucket: Channel, id: string): Promise<StoredConversation | null> {
     try {
       return JSON.parse(await readFile(this.file(bucket, id), "utf8")) as StoredConversation;
     } catch {
@@ -47,7 +62,7 @@ export class ChatStore {
     }
   }
 
-  async list(bucket: ChatBucket): Promise<ConversationMeta[]> {
+  async list(bucket: Channel): Promise<ConversationMeta[]> {
     let names: string[] = [];
     try {
       names = (await readdir(join(this.dir, bucket))).filter((n) => n.endsWith(".json"));
@@ -57,12 +72,14 @@ export class ChatStore {
     const items: ConversationMeta[] = [];
     for (const n of names) {
       const c = await this.get(bucket, n.slice(0, -5));
-      if (c) items.push({ id: c.id, title: c.title, createdAt: c.createdAt, updatedAt: c.updatedAt, count: c.messages.length });
+      if (c) items.push({ id: c.id, title: c.title, createdAt: c.createdAt, updatedAt: c.updatedAt, count: c.messages.length,
+        ...(c.subject ? { subject: c.subject } : {}), ...(c.open !== undefined ? { open: c.open } : {}) });
     }
     return items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
-  async save(bucket: ChatBucket, id: string, body: { title?: unknown; messages?: unknown }): Promise<ConversationMeta> {
+  async save(bucket: Channel, id: string,
+    body: { title?: unknown; messages?: unknown; subject?: unknown; open?: unknown; pending?: unknown }): Promise<ConversationMeta> {
     if (!Array.isArray(body.messages) || body.messages.length > MAX_MESSAGES) throw new HttpError(400, `messages: array, up to ${MAX_MESSAGES}`);
     const messages = body.messages.map((m) => {
       if (!m || typeof m !== "object" || Array.isArray(m)) throw new HttpError(400, "message must be an object");
@@ -70,14 +87,21 @@ export class ChatStore {
       if (r !== "user" && r !== "assistant") throw new HttpError(400, "role must be user or assistant");
       return m as Record<string, unknown>;
     });
+    if (body.open !== undefined && typeof body.open !== "boolean") throw new HttpError(400, "open must be a boolean");
+    if (body.pending !== undefined && (!Array.isArray(body.pending) || body.pending.length > 8
+      || body.pending.some((a) => !a || typeof a !== "object" || Array.isArray(a)))) throw new HttpError(400, "pending: up to 8 objects");
     const prev = await this.get(bucket, id);
+    const subject = subjectOf(body.subject) ?? prev?.subject;
+    const open = (body.open as boolean | undefined) ?? prev?.open;
+    const pending = (body.pending as Record<string, unknown>[] | undefined) ?? [];
     const now = new Date().toISOString();
     const firstUser = messages.find((m) => m.role === "user")?.content;
     const title = typeof body.title === "string" && body.title.trim()
       ? body.title.trim().slice(0, 120)
       : prev?.title && prev.title !== "Новый чат" ? prev.title
       : typeof firstUser === "string" && firstUser.trim() ? firstUser.trim().replace(/\s+/g, " ").slice(0, 60) : "Новый чат";
-    const conv: StoredConversation = { schema: 1, id, title, createdAt: prev?.createdAt ?? now, updatedAt: now, messages };
+    const conv: StoredConversation = { schema: 1, id, title, createdAt: prev?.createdAt ?? now, updatedAt: now, messages,
+      ...(subject ? { subject } : {}), ...(open !== undefined ? { open } : {}), ...(pending.length ? { pending } : {}) };
     const json = JSON.stringify(conv);
     if (json.length > MAX_BYTES) throw new HttpError(413, "Чат слишком большой: начните новый");
     await mkdir(join(this.dir, bucket), { recursive: true });
@@ -85,14 +109,15 @@ export class ChatStore {
     await writeFile(`${file}.tmp`, json, { encoding: "utf8", mode: 0o600 });
     await rename(`${file}.tmp`, file);
     await this.prune(bucket);
-    return { id, title, createdAt: conv.createdAt, updatedAt: now, count: messages.length };
+    return { id, title, createdAt: conv.createdAt, updatedAt: now, count: messages.length,
+      ...(subject ? { subject } : {}), ...(open !== undefined ? { open } : {}) };
   }
 
-  async remove(bucket: ChatBucket, id: string) {
+  async remove(bucket: Channel, id: string) {
     await rm(this.file(bucket, id), { force: true });
   }
 
-  private async prune(bucket: ChatBucket) {
+  private async prune(bucket: Channel) {
     const all = await this.list(bucket);
     for (const c of all.slice(MAX_CONVERSATIONS)) await this.remove(bucket, c.id);
   }

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ChevronRight, MessageSquarePlus, Plus, Trash2 } from "lucide-react";
 import type { ModuleUiProps } from "@trellis/core";
-import { sendToChat } from "@trellis/ui";
+import { openInWorkChat } from "@trellis/ui";
 
 type Api = ModuleUiProps["api"];
 export type RemarkStatus = "new" | "fixed" | "postponed" | "wontfix";
@@ -68,7 +68,7 @@ export function useRemarks(api: Api, docId?: string) {
 }
 
 const toChat = (r: Remark) =>
-  sendToChat("main", {
+  openInWorkChat({ kind: "remark", key: `remark:${r.id}`, title: r.summary.slice(0, 80) }, {
     title: `Замечание: ${r.summary.slice(0, 60)}`,
     text: [
       `Замечание к документации${r.doc ? ` «${r.doc.title}» (id: ${r.docId})` : ` (id: ${r.docId})`}`,

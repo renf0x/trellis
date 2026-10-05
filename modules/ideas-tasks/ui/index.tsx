@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Lightbulb, Plus, X } from "lucide-react";
 import type { MemoryEntry, ModuleUiProps } from "@trellis/core";
+import { CHAT_ACTION_EVENT } from "@trellis/ui";
 
 // Labels move to the dictionaries engine in stage 2.
 const STATUS: Record<string, { label: string; cls: string }> = {
@@ -22,6 +23,12 @@ export default function IdeasTasks({ api, slot }: ModuleUiProps) {
     api.get<{ entries: MemoryEntry[] }>(BASE).then((r) => setEntries(r.entries), (e: Error) => setError(e.message));
   }, [api]);
   useEffect(load, [load]);
+  // An idea saved from a chat ("В идеи" under a message) shows up here at once.
+  useEffect(() => {
+    const on = (e: Event) => (e as CustomEvent<{ post: string }>).detail?.post.startsWith(BASE) && load();
+    addEventListener(CHAT_ACTION_EVENT, on);
+    return () => removeEventListener(CHAT_ACTION_EVENT, on);
+  }, [load]);
 
   const run = (p: Promise<unknown>) => p.then(() => (setError(null), load()), (e: Error) => setError(e.message));
   const shown = (entries ?? []).filter((e) => filter === "all" || e.status === filter);

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { jevDecide } from "./jev.ts";
+import { JEV_BLOCKED, jevDecide, softenText } from "./jev.ts";
 
 // Shape recorded from a live call on 2026-09-22.
 const LIVE = {
@@ -66,15 +66,16 @@ test("jevDecide retries a Cloudflare page and a 429, then answers", async () => 
   assert.equal(r.answers.related.type, "noul");
 });
 
-test("jevDecide shows a short message instead of the Cloudflare page; a JSON 403 is not retried", async () => {
+test("jevDecide: a network-wide Cloudflare block stops analysis; a JSON 403 is not retried", async () => {
   let calls = 0;
-  const blocked = (async () => (calls++, new Response(CLOUDFLARE, { status: 403 }))) as typeof fetch;
+  const blocked = (async () => (calls++, new Response(CLOUDFLARE, { status: 403, headers: { "cf-ray": "8f00aa11bb22cc33-FRA" } }))) as typeof fetch;
   await assert.rejects(jevDecide({ apiKey: "k", model: "m", state: {}, questions, fetch: blocked, retryDelaysMs: [1, 1] }), (e: Error) => {
-    assert.match(e.message, /^Jev: 403, вместо ответа пришла страница Cloudflare \(«Attention Required! \| Cloudflare»\)/);
+    assert.match(e.message, /^Jev: 403, Cloudflare перед OpenRouter блокирует запросы с этого компьютера или сети \(«Attention Required! \| Cloudflare»\), Ray ID 8f00aa11bb22cc33-FRA/);
+    assert.match(e.message, new RegExp(JEV_BLOCKED));
     assert.doesNotMatch(e.message, /<html|DOCTYPE/);
     return true;
   });
-  assert.equal(calls, 3);
+  assert.equal(calls, 3 + 2 + 1); // retries, the softened text with one retry, the tiny probe
 
   calls = 0;
   const denied = (async () => (calls++, new Response(JSON.stringify({ error: { message: "key disabled" } }), { status: 403 }))) as typeof fetch;
@@ -90,4 +91,26 @@ test("jevDecide retries a dropped connection", async () => {
   }) as typeof fetch;
   await jevDecide({ apiKey: "k", model: "m", state: {}, questions, fetch: drop, retryDelaysMs: [1] });
   assert.equal(calls, 2);
+});
+
+test("jevDecide: a text Cloudflare's filter rejects goes again in look-alike characters, else a per-item error", async () => {
+  const bodies: string[] = [];
+  const filter = (async (_u: string, init: RequestInit) => {
+    const body = String(init.body);
+    bodies.push(body);
+    return /[<>{}]/.test(JSON.parse(body).state.doc) ? new Response(CLOUDFLARE, { status: 403 }) : new Response(JSON.stringify(LIVE), { status: 200 });
+  }) as typeof fetch;
+  const r = await jevDecide({ apiKey: "k", model: "m", state: { doc: "GET /mini?path={path} <b>" }, questions, fetch: filter, retryDelaysMs: [1] });
+  assert.equal(r.answers.related.type, "noul");
+  assert.match(bodies.at(-1)!, /⦃path⦄ ‹b›/);
+
+  // The text never passes, the tiny probe does: only this item fails, the run goes on.
+  const always = (async (_u: string, init: RequestInit) =>
+    String(init.body).includes("проверка связи") ? new Response(JSON.stringify(LIVE), { status: 200 }) : new Response(CLOUDFLARE, { status: 403 })) as typeof fetch;
+  await assert.rejects(jevDecide({ apiKey: "k", model: "m", state: { doc: "x" }, questions, fetch: always, retryDelaysMs: [1] }), (e: Error) => {
+    assert.match(e.message, /не пропускает текст этой проверки/);
+    assert.doesNotMatch(e.message, new RegExp(JEV_BLOCKED));
+    return true;
+  });
+  assert.deepEqual(softenText({ a: ["x;y", 1], b: "../etc" }), { a: ["x；y", 1], b: "…/etc" });
 });

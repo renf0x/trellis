@@ -68,3 +68,15 @@ test("EventBus isolates failing handlers", () => {
   }
   assert.deepEqual(seen, [1]);
 });
+
+test("validateManifest checks chat contributions: channel and own routes only", () => {
+  const chat = [{ channel: "main", prompt: "Идеи", actions: [{ id: "save-idea", label: "В идеи", post: "/api/m/docs-view/ideas" }] }];
+  assert.equal(validateManifest({ ...good, chat }).ok, true);
+  const res = validateManifest({
+    ...good,
+    chat: [{ channel: "nowhere", actions: [{ id: "x", label: "", post: "/api/m/other/ideas" }] }],
+  });
+  assert.equal(res.ok, false);
+  const paths = res.ok ? [] : res.issues.map((i) => i.path);
+  assert.deepEqual(paths, ["chat[0].channel", "chat[0].actions[0].label", "chat[0].actions[0].post"]);
+});

@@ -15,6 +15,7 @@ import {
   type RegistrySnapshot,
   type ServerModuleContext,
 } from "@trellis/core/node";
+import type { ChatChannel } from "@trellis/core";
 import { LlmError } from "@trellis/llm";
 import { registerChats } from "./chats.ts";
 import { registerLlm } from "./llm.ts";
@@ -68,7 +69,14 @@ async function main() {
     return reply.status(500).send({ error: "internal error" });
   });
 
-  const llm = await registerLlm(app, dataDir);
+  // Enabled modules add to a chat's system prompt (manifest `chat`); re-read per message like /api/modules.
+  const chatPrompt = async (channel: ChatChannel) => {
+    const snap = await loadModules(modulesDir, { disabled: await readDisabled() });
+    return snap.modules.filter((m) => m.enabled)
+      .flatMap((m) => (m.manifest.chat ?? []).filter((c) => c.channel === channel && c.prompt).map((c) => c.prompt!.trim()))
+      .join("\n\n");
+  };
+  const llm = await registerLlm(app, dataDir, { chatPrompt });
   registerChats(app, dataDir);
 
   // Server entries are loaded once at start; manifests are re-read on each /api/modules call.

@@ -2,7 +2,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { ClipboardPlus, ExternalLink, MessageSquarePlus } from "lucide-react";
 import type { ModuleUiProps } from "@trellis/core";
-import { sendToChat } from "@trellis/ui";
+import { openInWorkChat } from "@trellis/ui";
 
 const base = "/api/m/compare";
 type Api = ModuleUiProps["api"];
@@ -60,8 +60,7 @@ export function CoverageTab({ api, past, onError, onToast, navigate }: {
   async function toChat(r: Requirement) {
     try {
       const ctx = await api.get<{ title: string; text: string }>(`${base}/requirements/${r.id}/context${past ? `?run=${past}` : ""}`);
-      sendToChat("main", { title: ctx.title, text: ctx.text });
-      onToast("Требование добавлено в чат агента");
+      openInWorkChat({ kind: "requirement", key: `requirement:${r.id}`, title: r.text.slice(0, 80) }, { title: ctx.title, text: ctx.text });
     } catch (e) {
       onError((e as Error).message);
     }

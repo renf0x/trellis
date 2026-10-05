@@ -1,5 +1,5 @@
 // Browser client for /api/llm: settings, streaming chat (NDJSON) and usage.
-import type { AnalysisSettings, ChatBucket, CostTier, Usage } from "@trellis/core";
+import type { AnalysisSettings, ChatBucket, ChatChannel, CostTier, Usage } from "@trellis/core";
 
 export type ProviderId = "openrouter" | "chatgpt";
 export interface BucketSettings {
@@ -39,7 +39,7 @@ export function modelLabel(s: BucketSettings | undefined): string | null {
 }
 
 export async function* streamChat(
-  bucket: ChatBucket,
+  channel: ChatChannel,
   messages: { role: "user" | "assistant"; content: string }[],
   sessionId: string,
   signal: AbortSignal,
@@ -47,7 +47,7 @@ export async function* streamChat(
   const res = await fetch("/api/llm/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ bucket, messages, sessionId }),
+    body: JSON.stringify({ channel, messages, sessionId }),
     signal,
   });
   if (!res.ok || !res.body) {

@@ -3,7 +3,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ChevronRight, CloudDownload, ExternalLink, FileText, MessageSquarePlus, Search } from "lucide-react";
 import type { ModuleUiProps, DocRecord, SourceInfo } from "@trellis/core";
-import { sendToChat } from "@trellis/ui";
+import { openInWorkChat } from "@trellis/ui";
 import { DocRemarks, RemarksBoard, useRemarks } from "./remarks.tsx";
 
 type Item = Pick<DocRecord, "id" | "source" | "container" | "path" | "title">;
@@ -96,8 +96,8 @@ export default function DocsView({ api, navigate }: ModuleUiProps) {
               <FileText size={14} className="shrink-0" />
               <span className="min-w-0 truncate" title={`${doc.container}${doc.path}`}>{doc.container}{doc.path}</span>
               <button
-                title="Отправить страницу в чат агента: можно обсудить её и попросить правку"
-                onClick={() => sendToChat("main", { title: `Документ: ${doc.title}`, text: `Документация (id: ${doc.id})\n# ${doc.title}\nПуть: ${doc.container}${doc.path}\n\n${doc.content.slice(0, 12000)}` })}
+                title="Открыть страницу во вкладке чата «Рабочего места»: обсудить её и попросить правку"
+                onClick={() => openInWorkChat({ kind: "doc", key: `doc:${doc.id}`, title: doc.title }, { title: `Документ: ${doc.title}`, text: `Документация (id: ${doc.id})\n# ${doc.title}\nПуть: ${doc.container}${doc.path}\n\n${doc.content.slice(0, 12000)}` })}
                 className="ml-auto inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-accent">
                 <MessageSquarePlus size={12} /> В чат
               </button>

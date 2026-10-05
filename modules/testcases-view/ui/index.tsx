@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ClipboardPlus, CloudDownload, ExternalLink, MessageSquarePlus, Search, TriangleAlert, X } from "lucide-react";
 import type { ModuleUiProps, SourceInfo, TestCaseRecord } from "@trellis/core";
-import { sendToChat } from "@trellis/ui";
+import { openInWorkChat } from "@trellis/ui";
 
 type Row = Omit<TestCaseRecord, "steps"> & { stepCount: number; noExpected: boolean };
 interface ListResponse { sources: SourceInfo[]; total: number; states: string[]; suites: string[]; items: Row[] }
@@ -122,8 +122,9 @@ export default function TestCasesView({ api, navigate }: ModuleUiProps) {
           </div>
           <div className="mt-2 space-y-0.5 text-xs text-faint">{detail.suites.map((s) => <div key={s}>{s}</div>)}</div>
           <div className="mt-2 flex gap-3 text-xs">
-            <button onClick={() => sendToChat("main", { title: `Кейс #${detail.externalId} ${detail.title}`, text: caseText(detail) })}
-              title="Отправить кейс в чат агента: можно обсудить его и попросить правку" className="inline-flex items-center gap-1 text-accent">
+            <button onClick={() => openInWorkChat({ kind: "case", key: `case:${detail.id}`, title: `#${detail.externalId} ${detail.title}` },
+              { title: `Кейс #${detail.externalId} ${detail.title}`, text: caseText(detail) })}
+              title="Открыть кейс во вкладке чата «Рабочего места»: обсудить его и попросить правку" className="inline-flex items-center gap-1 text-accent">
               <MessageSquarePlus size={12} /> В чат
             </button>
             <button onClick={() => void toWork(detail.id)} title="Черновик правки этого кейса на рабочем месте"

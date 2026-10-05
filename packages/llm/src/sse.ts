@@ -88,11 +88,22 @@ export async function sendWithRetry(send: () => Promise<Response>, delays: numbe
   }
 }
 
+/** A Cloudflare block page (403 with HTML) in front of the API; the body stays readable. */
+export async function isCloudflarePage(res: Response) {
+  return res.status === 403 && isHtml(await res.clone().text().catch(() => ""));
+}
+
+/** Short description of a Cloudflare page: «title», Ray ID (for OpenRouter support). */
+export function cloudflareInfo(res: Response, html: string) {
+  const title = /<title>([^<]*)<\/title>/i.exec(html)?.[1]?.trim();
+  const ray = res.headers.get("cf-ray") ?? /Ray ID:\s*(?:<[^>]+>\s*)*([0-9a-f]{8,})/i.exec(html)?.[1];
+  return `${title ? ` («${title}»)` : ""}${ray ? `, Ray ID ${ray}` : ""}`;
+}
+
 export async function errorFrom(res: Response, provider: string): Promise<LlmError> {
   const text = await res.text().catch(() => "");
   if (isHtml(text)) {
-    const title = /<title>([^<]*)<\/title>/i.exec(text)?.[1]?.trim();
-    return new LlmError(res.status, `${provider}: ${res.status}, вместо ответа пришла страница Cloudflare${title ? ` («${title}»)` : ""}. ` +
+    return new LlmError(res.status, `${provider}: ${res.status}, вместо ответа пришла страница Cloudflare${cloudflareInfo(res, text)}. ` +
       "Защита OpenRouter не пропустила запрос, обычно из-за слишком частых запросов. Повторы не помогли: " +
       "запустите ещё раз через минуту.");
   }

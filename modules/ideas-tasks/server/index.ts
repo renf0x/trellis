@@ -27,7 +27,7 @@ export function register(ctx: ServerModuleContext) {
   ctx.route("POST", "/ideas", async ({ body }) => {
     const b = (body ?? {}) as Record<string, unknown>;
     const title = text(b.title, "title", 200, true)!;
-    const fields: Record<string, string> = { Author: text(b.author, "author", 80) ?? "user", Source: "ui" };
+    const fields: Record<string, string> = { Author: text(b.author, "author", 80) ?? "user", Source: b.source === "chat" ? "chat" : "ui" };
     const summary = text(b.summary, "summary", 4000);
     if (summary) fields.Summary = summary;
     return ctx.memory.add("IDEA", { title, fields });

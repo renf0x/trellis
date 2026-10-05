@@ -1,4 +1,5 @@
 // Module manifest contract (modules/<id>/module.json). Browser-safe: no Node imports.
+import { CHAT_CHANNELS, type ChatChannel } from "./llm.ts";
 
 export const SLOTS = ["sidebar", "center-tab", "right-panel", "dashboard-widget", "settings-page"] as const;
 export type SlotName = (typeof SLOTS)[number];
@@ -33,6 +34,23 @@ export interface SlotDecl {
   order?: number;
 }
 
+/** A button under chat messages: posts `{title, summary}` (from the message) to the module's own route. */
+export interface ChatActionDecl {
+  id: string;
+  label: string;
+  /** lucide-react icon name. */
+  icon?: string;
+  /** "/api/m/<this module id>/…" */
+  post: string;
+}
+
+/** What a module adds to a chat: extra system prompt text and message actions. */
+export interface ChatContribution {
+  channel: ChatChannel;
+  prompt?: string;
+  actions?: ChatActionDecl[];
+}
+
 export interface ModuleManifest {
   id: string;
   title: string;
@@ -48,6 +66,7 @@ export interface ModuleManifest {
   server?: string;
   /** Relative path to a React entry with a default export component. */
   ui?: string;
+  chat?: ChatContribution[];
 }
 
 export interface ManifestIssue {
@@ -98,6 +117,27 @@ export function validateManifest(raw: unknown):
   else raw.permissions.forEach((p, i) => {
     if (!PERMISSIONS.includes(p as Permission)) bad(`permissions[${i}]`, `unknown permission ${String(p)}`);
   });
+
+  if (raw.chat !== undefined) {
+    if (!Array.isArray(raw.chat)) bad("chat", "must be an array");
+    else raw.chat.forEach((c, i) => {
+      const at = `chat[${i}]`;
+      if (!isRecord(c)) return bad(at, "must be an object");
+      if (!CHAT_CHANNELS.includes(c.channel as ChatChannel)) bad(`${at}.channel`, `one of ${CHAT_CHANNELS.join(", ")}`);
+      if (c.prompt !== undefined && (typeof c.prompt !== "string" || c.prompt.length > 2000)) bad(`${at}.prompt`, "string up to 2000 chars");
+      if (c.actions === undefined) return;
+      if (!Array.isArray(c.actions)) return bad(`${at}.actions`, "must be an array");
+      c.actions.forEach((a, j) => {
+        const ap = `${at}.actions[${j}]`;
+        if (!isRecord(a)) return bad(ap, "must be an object");
+        if (typeof a.id !== "string" || !/^[a-z][a-z0-9-]{0,40}$/.test(a.id)) bad(`${ap}.id`, "kebab-case id");
+        if (typeof a.label !== "string" || !a.label.trim()) bad(`${ap}.label`, "required string");
+        if (a.icon !== undefined && typeof a.icon !== "string") bad(`${ap}.icon`, "must be a string");
+        const own = `/api/m/${String(raw.id)}/`;
+        if (typeof a.post !== "string" || !a.post.startsWith(own) || a.post.includes("..")) bad(`${ap}.post`, `must start with ${own}`);
+      });
+    });
+  }
 
   return issues.length ? { ok: false, issues } : { ok: true, manifest: raw as unknown as ModuleManifest };
 }

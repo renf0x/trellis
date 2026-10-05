@@ -1,8 +1,9 @@
-// Test-case workbench: drafts with statuses; a draft goes to Qase only through a confirmed change card.
+// Workbench: the big analysis chat (a tab per report sent with «В чат») and test-case drafts with statuses;
+// a draft goes to Qase only through a confirmed change card.
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowDown, ArrowUp, ExternalLink, MessageSquarePlus, Plus, Save, Send, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ClipboardList, ExternalLink, MessageSquarePlus, MessagesSquare, Plus, Save, Send, Trash2, X } from "lucide-react";
 import type { ModuleUiProps } from "@trellis/core";
-import { ChangeCard, sendToChat, type Proposal } from "@trellis/ui";
+import { ChangeCard, ChatPanel, openInWorkChat, WORKBENCH_VIEW_EVENT, WORKBENCH_VIEW_KEY, type Proposal } from "@trellis/ui";
 
 const base = "/api/m/workbench";
 /** Another module puts a draft id here before navigating, so the workbench opens it. */
@@ -42,7 +43,65 @@ function caseText(i: Item, d: Draft) {
   ].filter(Boolean).join("\n");
 }
 
-export default function Workbench({ api }: ModuleUiProps) {
+type View = "chat" | "drafts";
+function initialView(): View {
+  try {
+    // A draft opened from another screen wins over the remembered view.
+    if (localStorage.getItem(OPEN_KEY)) return "drafts";
+    return localStorage.getItem(WORKBENCH_VIEW_KEY) === "drafts" ? "drafts" : "chat";
+  } catch {
+    return "chat";
+  }
+}
+
+export default function Workbench({ api, navigate }: ModuleUiProps) {
+  const [view, setView] = useState<View>(initialView);
+  useEffect(() => {
+    try { localStorage.setItem(WORKBENCH_VIEW_KEY, view); } catch { /* storage blocked */ }
+  }, [view]);
+  useEffect(() => {
+    const on = (e: Event) => setView((e as CustomEvent<View>).detail === "drafts" ? "drafts" : "chat");
+    addEventListener(WORKBENCH_VIEW_EVENT, on);
+    return () => removeEventListener(WORKBENCH_VIEW_EVENT, on);
+  }, []);
+  const tab = (v: View, icon: ReactNode, label: string) => (
+    <button onClick={() => setView(v)}
+      className={`flex h-8 items-center gap-1.5 rounded-md px-3 text-sm ${view === v ? "bg-raised text-ink" : "text-dim hover:text-ink"}`}>
+      {icon} {label}
+    </button>
+  );
+  return (
+    <div className="flex h-[calc(100vh-110px)] min-h-0 flex-col gap-3">
+      <div className="flex items-center gap-3">
+        <h1 className="text-base font-semibold">Рабочее место</h1>
+        <div className="flex gap-1 rounded-lg border border-line bg-panel p-0.5">
+          {tab("chat", <MessagesSquare size={14} />, "Чат")}
+          {tab("drafts", <ClipboardList size={14} />, "Черновики")}
+        </div>
+      </div>
+      <div className="min-h-0 flex-1">
+        {view === "chat" ? (
+          <ChatPanel
+            channel="work"
+            tabs
+            wide
+            fill
+            title="Чат по отчётам"
+            icon={<div className="grid size-8 place-items-center rounded-lg bg-accent-soft text-accent"><MessagesSquare size={18} /></div>}
+            intro="Здесь разбирают отчёты анализа, находки, покрытие и замечания, просят правки кейсов и документации и отправляют их в Qase, Jira или Confluence (только после вашего подтверждения). Кнопка «В чат» у отчёта открывает отдельную вкладку с его данными; закрытые вкладки остаются в истории."
+            placeholder="Вопрос по отчёту или просьба о правке… (Enter — отправить, Shift+Enter — перенос)"
+            api={api}
+            navigate={navigate}
+          />
+        ) : (
+          <Drafts api={api} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Drafts({ api }: Pick<ModuleUiProps, "api">) {
   const [items, setItems] = useState<Item[]>([]);
   const [counts, setCounts] = useState<Record<Status, number>>({ todo: 0, in_progress: 0, clarify: 0, done: 0, sent: 0 });
   const [filter, setFilter] = useState<Status | "">("");
@@ -84,10 +143,10 @@ export default function Workbench({ api }: ModuleUiProps) {
   const shown = filter ? items.filter((i) => i.status === filter) : items;
   const current = items.find((i) => i.id === selected) ?? null;
   return (
-    <div className="flex h-full min-h-0 gap-4 p-4">
+    <div className="flex h-full min-h-0 gap-4">
       <aside className="flex w-80 shrink-0 flex-col rounded-xl border border-line bg-panel">
         <div className="flex items-center gap-2 border-b border-line p-3">
-          <h1 className="flex-1 text-base font-semibold">Рабочее место</h1>
+          <h2 className="flex-1 text-base font-semibold">Черновики</h2>
           <button onClick={() => void create()} className="flex h-8 items-center gap-1 rounded-lg bg-accent px-2.5 text-sm"><Plus size={14} /> Новый кейс</button>
         </div>
         <div className="flex flex-wrap gap-1 border-b border-line p-2 text-xs">
@@ -269,7 +328,8 @@ function Editor({ api, item, suites, onChanged, onDeleted }: {
         <button disabled={busy || !dirty} onClick={() => void save()} className="flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3 text-sm disabled:opacity-40">
           <Save size={14} /> {dirty ? "Сохранить" : "Сохранено"}
         </button>
-        <button onClick={() => sendToChat("main", { title: `Черновик: ${d.title || item.id}`, text: caseText(item, d) })}
+        <button onClick={() => openInWorkChat({ kind: "draft", key: `draft:${item.id}`, title: d.title || item.id },
+          { title: `Черновик: ${d.title || item.id}`, text: caseText(item, d) })}
           title="Обсудить с агентом: дописать шаги, проверить формулировки" className="flex h-9 items-center gap-1.5 rounded-lg border border-line px-3 text-sm text-dim hover:text-ink">
           <MessageSquarePlus size={14} /> В чат
         </button>

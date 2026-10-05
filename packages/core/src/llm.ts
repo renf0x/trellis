@@ -3,6 +3,14 @@
 /** Cost bucket: the main QA chat and the dev chat are billed and configured separately. */
 export type ChatBucket = "main" | "dev";
 
+/**
+ * Chat window: "main" is the side chat for general questions and ideas, "work" is the big analysis chat on the
+ * workbench (a tab per report), "dev" is the chat about Trellis itself. "work" uses the main bucket's model and billing.
+ */
+export type ChatChannel = ChatBucket | "work";
+export const CHAT_CHANNELS: readonly ChatChannel[] = ["main", "work", "dev"];
+export const channelBucket = (c: ChatChannel): ChatBucket => (c === "dev" ? "dev" : "main");
+
 export type ProviderAuth =
   | { kind: "api-key" } // OpenRouter, corporate gateways
   | { kind: "oauth-subscription" }; // ChatGPT subscription login, tokens stored under data/

@@ -5,10 +5,49 @@
   "description": "Идеи и задачи по доработке Trellis. Хранятся в Arbor как записи IDEA-*.",
   "icon": "Lightbulb",
   "slots": [
-    { "slot": "sidebar", "section": "dev", "order": 20 },
-    { "slot": "right-panel", "section": ["work", "dev"], "order": 50 }
+    {
+      "slot": "sidebar",
+      "section": "dev",
+      "order": 20
+    },
+    {
+      "slot": "right-panel",
+      "section": [
+        "work",
+        "dev"
+      ],
+      "order": 50
+    }
   ],
-  "permissions": ["arbor:read", "arbor:write"],
+  "permissions": [
+    "arbor:read",
+    "arbor:write"
+  ],
   "server": "server/index.ts",
-  "ui": "ui/index.tsx"
+  "ui": "ui/index.tsx",
+  "chat": [
+    {
+      "channel": "main",
+      "prompt": "Если пользователь делится идеей или задачей, помоги сформулировать её: короткий заголовок первой строкой, затем суть. Сохранить её в «Идеи и задачи» можно кнопкой «В идеи» под сообщением; сам ты ничего не сохраняешь.",
+      "actions": [
+        {
+          "id": "save-idea",
+          "label": "В идеи",
+          "icon": "Lightbulb",
+          "post": "/api/m/ideas-tasks/ideas"
+        }
+      ]
+    },
+    {
+      "channel": "dev",
+      "actions": [
+        {
+          "id": "save-idea",
+          "label": "В идеи",
+          "icon": "Lightbulb",
+          "post": "/api/m/ideas-tasks/ideas"
+        }
+      ]
+    }
+  ]
 }

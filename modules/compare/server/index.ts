@@ -117,7 +117,8 @@ async function pool<T>(items: T[], n: number, signal: AbortSignal, fn: (item: T)
   }));
 }
 
-const fatal = (err: unknown) => /402|401|не хватает|выключен|Нет ключа/.test((err as Error).message);
+// Money, auth or a Cloudflare block of the whole network ("Анализ остановлен") won't pass on the next item.
+const fatal = (err: unknown) => /402|401|не хватает|выключен|Нет ключа|Анализ остановлен/.test((err as Error).message);
 
 export function register(ctx: ServerModuleContext) {
   let state: State = { run: null, findings: [], links: [] };
@@ -241,7 +242,7 @@ export function register(ctx: ServerModuleContext) {
     const prev = state;
     state = { ...state, run };
     const threshold = analysis.jev.threshold;
-    const workers = engine === "jev" ? 4 : 2;
+    const workers = 2; // more parallel Jev calls meet Cloudflare blocks on OpenRouter
     const cached = async <T extends { costUsd: number }>(key: string, f: () => Promise<T>): Promise<T> => {
       if (cache[key]) return cache[key] as T;
       const v = await f();
@@ -249,8 +250,11 @@ export function register(ctx: ServerModuleContext) {
       cache[key] = v;
       return v;
     };
+    let stopReason = "";
     const failed = (err: unknown) => {
-      if (fatal(err)) abort?.abort(); // money or auth problems won't fix themselves on the next item
+      if (!fatal(err) || signal.aborted) return;
+      stopReason = (err as Error).message;
+      abort?.abort();
     };
 
     void (async () => {
@@ -345,7 +349,7 @@ export function register(ctx: ServerModuleContext) {
         parts.push(`требований: ${s.total}, покрыто ${s.percent ?? 0}% проверенных`);
       }
       if (stages.includes("pairs") && next.stageAt?.pairs === runAt) parts.push(`находок: ${next.findings.length}, связей: ${next.links.length}`);
-      run.message = `${signal.aborted ? "Остановлено. " : ""}${parts.join("; ") || "Ничего не проверено"}`;
+      run.message = `${signal.aborted ? `Остановлено. ${stopReason ? `${stopReason} ` : ""}` : ""}${parts.join("; ") || "Ничего не проверено"}`;
       state = next;
       await Promise.all([save(), ctx.files.write("cache", cache), saveRemarks()]);
       await archiveLoaded;

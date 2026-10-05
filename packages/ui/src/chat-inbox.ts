@@ -1,6 +1,7 @@
 // Hand-off from any screen to a chat: a report, a finding or a selected fragment becomes an attachment
 // the chat panel shows above its input and sends with the next question. Lives in memory for the tab.
-import type { ChatBucket } from "@trellis/core";
+// Reports go to the workbench chat with openInWorkChat (chat-store.ts): a tab per report.
+import type { ChatChannel } from "@trellis/core";
 
 export interface ChatAttachment {
   id: string;
@@ -12,21 +13,21 @@ export interface ChatAttachment {
   quote?: string;
 }
 
-const pending: Record<ChatBucket, ChatAttachment[]> = { main: [], dev: [] };
-const listeners = new Set<(bucket: ChatBucket) => void>();
+const pending: Record<ChatChannel, ChatAttachment[]> = { main: [], work: [], dev: [] };
+const listeners = new Set<(bucket: ChatChannel) => void>();
 
-export function sendToChat(bucket: ChatBucket, a: Omit<ChatAttachment, "id">) {
+export function sendToChat(bucket: ChatChannel, a: Omit<ChatAttachment, "id">) {
   pending[bucket] = [...pending[bucket], { ...a, id: crypto.randomUUID() }].slice(-8);
   for (const l of listeners) l(bucket);
 }
 
-export function takeAttachments(bucket: ChatBucket): ChatAttachment[] {
+export function takeAttachments(bucket: ChatChannel): ChatAttachment[] {
   const out = pending[bucket];
   pending[bucket] = [];
   return out;
 }
 
-export function onAttachments(fn: (bucket: ChatBucket) => void) {
+export function onAttachments(fn: (bucket: ChatChannel) => void) {
   listeners.add(fn);
   return () => void listeners.delete(fn);
 }

@@ -47,6 +47,8 @@ export function softenText(v: unknown): unknown {
 
 /** Cloudflare blocked Jev for the whole network or computer, not for one text: further calls are useless. */
 export const JEV_BLOCKED = "Анализ остановлен";
+/** OpenRouter refuses some countries and networks; the chat may still work there through ChatGPT. */
+export const JEV_PROXY_TIP = "Если OpenRouter не пускает из вашей сети или страны, включите «Прокси для Jev» в «Настройки → Анализ».";
 
 export async function jevDecide(req: DecideRequest): Promise<DecisionResult> {
   const delays = req.retryDelaysMs ?? [2000, 5000, 12000];
@@ -77,7 +79,7 @@ export async function jevDecide(req: DecideRequest): Promise<DecisionResult> {
       if (probeBlocked) {
         throw new LlmError(403, `Jev: 403, Cloudflare перед OpenRouter блокирует запросы с этого компьютера или сети${info}, ` +
           `даже самый короткий. ${JEV_BLOCKED}: повторы только продлевают блокировку. Обычно причина в адресе корпоративного ` +
-          "прокси или VPN либо в слишком частых запросах. Подождите 15–30 минут или запустите из другой сети.");
+          "прокси или VPN, в стране или в слишком частых запросах. Подождите 15–30 минут или запустите из другой сети. " + JEV_PROXY_TIP);
       }
       throw new LlmError(403, `Jev: 403, Cloudflare перед OpenRouter не пропускает текст этой проверки${info}: ` +
         "его фильтр принял фрагмент документа или кейса (URL, код, разметку) за атаку. Связь с OpenRouter в порядке, " +
@@ -86,6 +88,7 @@ export async function jevDecide(req: DecideRequest): Promise<DecisionResult> {
   }
   if (!res.ok) {
     const err = await errorFrom(res, "Jev");
+    if (res.status === 403 || res.status === 451) err.message += ` ${JEV_PROXY_TIP}`;
     if (res.status === 402) err.message = "Jev: 402, на балансе OpenRouter не хватает средств.";
     if (res.status === 413) err.message = "Jev: 413, документ и кейс вместе слишком велики для модели (32k токенов).";
     throw err;

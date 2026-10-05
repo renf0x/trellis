@@ -62,6 +62,9 @@ function browsers(): { name: string; opts: { channel?: string; executablePath?: 
   ];
 }
 
+/** Block pages of anti-bot filters and WAFs: the agent reports them instead of testing the error page. */
+const BLOCK_PAGE = /\b403\b.*forbidden|access denied|доступ (к сайту .{0,40})?запрещ|attention required|проверка браузера/is;
+
 interface Session {
   page: Page;
   dialogs: string[];
@@ -78,7 +81,13 @@ export async function register(ctx: ServerModuleContext) {
   function launch() {
     browser ??= (async () => {
       await mkdir(profile, { recursive: true });
-      const opts = { headless: false, viewport: null, acceptDownloads: false, args: ["--no-first-run", "--no-default-browser-check"] };
+      // Without the automation switch and with the usual sandbox the window is an ordinary browser to the site:
+      // anti-bot filters (hoff.ru and the like) answer 403 to navigator.webdriver and --no-sandbox.
+      const opts = {
+        headless: false, viewport: null, acceptDownloads: false, chromiumSandbox: true,
+        ignoreDefaultArgs: ["--enable-automation"],
+        args: ["--no-first-run", "--no-default-browser-check", "--disable-blink-features=AutomationControlled"],
+      };
       const failed: string[] = [];
       for (const b of browsers()) {
         try {
@@ -143,7 +152,9 @@ export async function register(ctx: ServerModuleContext) {
     await fn();
     await s.page.waitForTimeout(400);
     const snap = await snapshot(s);
-    return { ok: true, summary: `${summary} → ${snap.title || snap.url}`, detail: formatSnapshot(snap, 2500) };
+    const blocked = BLOCK_PAGE.test(`${snap.title}\n${snap.text.slice(0, 600)}`)
+      ? " (похоже на блокировку сайтом: пройдите проверку вручную в этом окне или попросите доступ для тестов)" : "";
+    return { ok: true, summary: `${summary} → ${snap.title || snap.url}${blocked}`, detail: formatSnapshot(snap, 2500) };
   }
 
   async function screenshot(s: Session, full: boolean): Promise<ChatToolResult> {

@@ -11,6 +11,7 @@
     "test": "node --import tsx --test src/*.test.ts"
   },
   "dependencies": {
-    "@trellis/core": "*"
+    "@trellis/core": "*",
+    "undici": "^7.30.0"
   }
 }

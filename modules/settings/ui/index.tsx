@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Bot, Check, KeyRound, LogIn, LogOut, MessagesSquare, RefreshCw, Sparkles, Zap } from "lucide-react";
+import { Bot, Check, Globe, KeyRound, LogIn, LogOut, MessagesSquare, RefreshCw, Sparkles, Zap } from "lucide-react";
 import type { ChatBucket, ModuleUiProps } from "@trellis/core";
 import { Block, type BucketSettings, type LlmSettingsResponse, type ProviderId } from "@trellis/ui";
 
@@ -288,6 +288,72 @@ function AnalysisCard({ data, api, onSaved, onError }: {
         </label>
         <button onClick={() => void save()} disabled={!dirty} className={`${btn} bg-accent`}><Check size={15} /> Сохранить</button>
       </div>
+      <JevProxy data={data} api={api} onSaved={onSaved} onError={onError} />
     </section>
+  );
+}
+
+/** Proxy for Jev requests only: OpenRouter may refuse a country or a network while the chat works directly. */
+function JevProxy({ data, api, onSaved, onError }: {
+  data: LlmSettingsResponse; api: Api; onSaved: () => void; onError: (e: string | null) => void;
+}) {
+  const proxy = data.analysis.jev.proxy ?? { enabled: false, hint: null };
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  // A typed URL is saved with any change, so the switch and the check use what the tester sees.
+  const patch = (extra: Record<string, unknown>) =>
+    api.patch("/api/llm/analysis", { jev: { ...(url.trim() ? { proxyUrl: url.trim() } : {}), ...extra } })
+      .then(() => (setUrl(""), onError(null), onSaved()));
+  const run = (f: () => Promise<unknown>) => f().catch((e: Error) => onError(e.message));
+  async function check() {
+    setBusy(true);
+    setNote(null);
+    try {
+      if (url.trim()) await patch({});
+      const r = await api.post<{ ok: boolean; route: string; model?: string; ms?: number; error?: string }>("/api/llm/analysis/test");
+      setNote(r.ok
+        ? { ok: true, text: `Jev отвечает ${r.route}: ${r.model}, ${((r.ms ?? 0) / 1000).toFixed(1)} с` }
+        : { ok: false, text: r.error?.includes(r.route) ? r.error : `Jev ${r.route}: ${r.error}` });
+    } catch (e) {
+      setNote({ ok: false, text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="mt-4 border-t border-line pt-3">
+      <label className="flex items-center gap-2 text-sm font-medium">
+        <input type="checkbox" checked={proxy.enabled}
+          onChange={(e) => void run(() => patch({ proxy: { enabled: e.target.checked } }))} />
+        <Globe size={15} /> Прокси для Jev
+      </label>
+      <p className="mt-1 text-xs text-dim">
+        Если OpenRouter не пускает Jev из вашей сети или страны (ошибка 403), запросы Jev пойдут через прокси в другой стране.
+        Чат и остальные модели по-прежнему работают напрямую. Формат: <code>socks5://логин:пароль@хост:порт</code>,{" "}
+        <code>http://хост:порт</code> или <code>https://…</code>. Адрес с паролем хранится в <code>data/secrets</code> и в
+        интерфейсе не показывается.
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <input type="password" autoComplete="off" value={url} onChange={(e) => setUrl(e.target.value)}
+          placeholder={proxy.hint ? `Сохранён ${proxy.hint}; новый адрес заменит его` : "socks5://user:pass@host:1080"}
+          className={`${input} w-96 max-w-full`} />
+        <button disabled={!url.trim()} onClick={() => void run(() => patch({}))} className={`${btn} border border-line`}>
+          <Check size={15} /> Сохранить адрес
+        </button>
+        {proxy.hint && (
+          <button onClick={() => void run(() => api.patch("/api/llm/analysis", { jev: { proxyUrl: "" } }).then(() => (onError(null), onSaved())))}
+            className={`${btn} border border-line text-dim`}>Удалить адрес</button>
+        )}
+        <button disabled={busy} onClick={() => void check()} className={`${btn} border border-line`}>
+          {busy ? "Проверяю…" : "Проверить Jev"}
+        </button>
+      </div>
+      <p className="mt-1 text-xs text-faint">
+        {proxy.hint ? `Адрес: ${proxy.hint}. ` : "Адрес не задан. "}
+        {proxy.enabled && proxy.hint ? "Jev идёт через прокси." : "Jev идёт напрямую."} Проверка шлёт один короткий запрос (доли цента).
+      </p>
+      {note && <p className={`mt-2 break-words text-xs ${note.ok ? "text-ok" : "text-bad"}`}>{note.text}</p>}
+    </div>
   );
 }

@@ -87,7 +87,11 @@ export interface DecisionResult {
 
 /** "Анализ" profile in settings. Off by default: companies may not use Jev at all. */
 export interface AnalysisSettings {
-  jev: { enabled: boolean; model: string; threshold: number };
+  jev: {
+    enabled: boolean; model: string; threshold: number;
+    /** Proxy for Jev requests only; `hint` is scheme, host and port of the saved URL (null when none is saved). */
+    proxy?: { enabled: boolean; hint: string | null };
+  };
 }
 
 /** LLM access for module servers (needs llm:main). Usage is written to the ledger under bucket "analysis". */

@@ -28,6 +28,9 @@ import {
   FALLBACK_CHATGPT_MODELS,
   jevDecide,
   JEV_DEFAULT_MODEL,
+  parseProxyUrl,
+  proxiedFetch,
+  proxyHint,
   Ledger,
   listChatGptModels,
   LlmError,
@@ -105,7 +108,9 @@ function str(v: unknown, field: string, max = 200): string {
   return s;
 }
 
-const analysisDefaults = (): AnalysisSettings => ({ jev: { enabled: false, model: JEV_DEFAULT_MODEL, threshold: 0.7 } });
+const analysisDefaults = (): AnalysisSettings => ({
+  jev: { enabled: false, model: JEV_DEFAULT_MODEL, threshold: 0.7, proxy: { enabled: false, hint: null } },
+});
 
 /** Registers /api/llm routes and returns the service module servers get as ctx.llm. */
 /** `chatPrompt` adds text from enabled modules (their manifest `chat` entries) to a chat's system prompt;
@@ -121,6 +126,7 @@ export async function registerLlm(app: FastifyInstance, dataDir: string,
   const analysisFile = join(dataDir, "config", "analysis.json");
   const orKeyFile = join(secretsDir, "openrouter.json");
   const gptFile = join(secretsDir, "chatgpt-oauth.json");
+  const jevProxyFile = join(secretsDir, "jev-proxy.json");
   const ledger = new Ledger(join(dataDir, "usage", "ledger.jsonl"));
 
   async function loadSettings(): Promise<LlmSettings> {
@@ -138,16 +144,34 @@ export async function registerLlm(app: FastifyInstance, dataDir: string,
     return out;
   }
 
+  /** The saved proxy URL for Jev (with its login), or "" when none is saved or it no longer parses. */
+  async function jevProxyUrl() {
+    const url = (await readJson<{ url: string }>(jevProxyFile))?.url ?? "";
+    try {
+      return url && (parseProxyUrl(url), url);
+    } catch {
+      return "";
+    }
+  }
+
   async function loadAnalysis(): Promise<AnalysisSettings> {
     const d = analysisDefaults();
     const r: Partial<AnalysisSettings["jev"]> = (await readJson<Partial<AnalysisSettings>>(analysisFile))?.jev ?? {};
+    const url = await jevProxyUrl();
     return {
       jev: {
         enabled: r.enabled === true,
         model: typeof r.model === "string" && r.model ? r.model : d.jev.model,
         threshold: typeof r.threshold === "number" && r.threshold >= 0 && r.threshold <= 1 ? r.threshold : d.jev.threshold,
+        proxy: { enabled: r.proxy?.enabled === true, hint: url ? proxyHint(url) : null },
       },
     };
+  }
+
+  /** Jev's fetch: through the proxy when it is switched on and a URL is saved, direct otherwise. */
+  async function jevFetch(a: AnalysisSettings) {
+    const url = a.jev.proxy?.enabled ? await jevProxyUrl() : "";
+    return url ? proxiedFetch(url) : undefined;
   }
 
   const openRouterKey = async () =>
@@ -199,8 +223,45 @@ export async function registerLlm(app: FastifyInstance, dataDir: string,
       if (!(t >= 0 && t <= 1)) throw new HttpError(400, "threshold must be 0..1");
       cur.jev.threshold = t;
     }
-    await writeJson(analysisFile, cur);
-    return { analysis: cur };
+    // The URL goes to data/secrets (it may hold a password); analysis.json keeps the switch only.
+    if (j.proxyUrl !== undefined) {
+      const url = str(j.proxyUrl, "jev.proxyUrl", 500);
+      if (url) {
+        try {
+          parseProxyUrl(url);
+        } catch (err) {
+          throw new HttpError(400, (err as Error).message);
+        }
+        await writeJson(jevProxyFile, { url });
+      } else await rm(jevProxyFile, { force: true });
+    }
+    if (j.proxy?.enabled !== undefined) cur.jev.proxy = { enabled: j.proxy.enabled === true, hint: null };
+    if (cur.jev.proxy?.enabled && !(await jevProxyUrl())) {
+      if (j.proxy?.enabled === true) throw new HttpError(400, "Укажите адрес прокси для Jev");
+      cur.jev.proxy = { enabled: false, hint: null }; // the URL was cleared: Jev goes direct again
+    }
+    await writeJson(analysisFile, { jev: { ...cur.jev, proxy: { enabled: cur.jev.proxy?.enabled === true } } });
+    return { analysis: await loadAnalysis() };
+  });
+
+  // One tiny Jev call (a fraction of a cent) with the saved settings: shows whether Jev gets through, and by which route.
+  app.post("/api/llm/analysis/test", async () => {
+    const a = await loadAnalysis();
+    const apiKey = await openRouterKey();
+    if (!apiKey) throw new HttpError(409, "Нет ключа OpenRouter: Jev работает через OpenRouter");
+    const fetch = await jevFetch(a);
+    const route = fetch ? `через прокси ${a.jev.proxy?.hint}` : "напрямую";
+    const started = Date.now();
+    try {
+      const r = await jevDecide({
+        apiKey, model: a.jev.model, state: "проверка связи", retryDelaysMs: [], fetch,
+        questions: { ok: { type: "noul", instructions: "Это короткая проверка связи?" } },
+      });
+      await ledger.append({ at: new Date().toISOString(), bucket: "analysis", provider: "openrouter", model: r.model, tier: "paid", usage: r.usage });
+      return { ok: true, route, model: r.model, ms: Date.now() - started };
+    } catch (err) {
+      return { ok: false, route, error: (err as Error).message };
+    }
   });
 
   app.patch("/api/llm/settings/:bucket", async (req) => {
@@ -448,7 +509,7 @@ export async function registerLlm(app: FastifyInstance, dataDir: string,
       if (!a.jev.enabled) throw new HttpError(409, "Jev выключен: включите его в «Настройки → Анализ»");
       const apiKey = await openRouterKey();
       if (!apiKey) throw new HttpError(409, "Нет ключа OpenRouter: Jev работает через OpenRouter");
-      const r = await jevDecide({ apiKey, model: a.jev.model, state, questions, signal: opts.signal });
+      const r = await jevDecide({ apiKey, model: a.jev.model, state, questions, signal: opts.signal, fetch: await jevFetch(a) });
       await ledger.append({ at: new Date().toISOString(), bucket: "analysis", provider: "openrouter", model: r.model, tier: "paid", usage: r.usage });
       return r;
     },

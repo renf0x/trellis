@@ -47,7 +47,7 @@ interface Finding {
 interface Run { engine: Engine; running: boolean; total: number; done: number; costUsd: number; message: string; finishedAt?: string; stages?: Stage[]; stage?: Stage }
 interface StatusResponse {
   run: Run | null;
-  engines: { chat: string | null; jev: { enabled: boolean; model: string; threshold: number } };
+  engines: { chat: string | null; jev: { enabled: boolean; model: string; threshold: number; proxy?: { enabled: boolean; hint: string | null } } };
   data: { docs: number; cases: number; pairs: number; orphanCases: number; uncoveredDocs: number };
   counts: Partial<Record<Kind, number>>;
   links: number;
@@ -181,7 +181,9 @@ export default function Compare({ api, navigate }: ModuleUiProps) {
             <EngineButton on={engine === "chat"} onClick={() => setEngine("chat")} icon={<Bot size={15} />}
               label="Модель чата" hint={engines.chat ?? "не выбрана"} />
             <EngineButton on={engine === "jev"} disabled={!engines.jev.enabled} onClick={() => setEngine("jev")}
-              icon={<Sparkles size={15} />} label="Jev" hint={engines.jev.enabled ? `порог ${pct(engines.jev.threshold)}` : "выключен"} />
+              icon={<Sparkles size={15} />} label="Jev" hint={engines.jev.enabled
+                ? `порог ${pct(engines.jev.threshold)}${engines.jev.proxy?.enabled && engines.jev.proxy.hint ? " · через прокси" : ""}`
+                : "выключен"} />
           </div>
           <label className="flex items-center gap-2 text-sm text-dim" title="Сколько документов, требований и пар проверить моделью на каждом этапе за один запуск">
             Проверок на этап

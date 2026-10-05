@@ -1,6 +1,6 @@
 // OpenRouter: OpenAI-compatible chat completions. The model is whatever id the user typed in settings.
 import type { ChatChunk, ChatMessage, ToolSpec, Usage } from "@trellis/core";
-import { errorFrom, LlmError, readSse } from "./sse.ts";
+import { errorFrom, LlmError, readSse, sendWithRetry } from "./sse.ts";
 
 export const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -27,23 +27,10 @@ function toOpenAi(m: ChatMessage) {
   return { role: m.role, content: m.content };
 }
 
-/** Free models are often rate-limited upstream: retry these statuses before any output was streamed. */
-const RETRY_STATUS = new Set([408, 429, 500, 502, 503, 504]);
-const sleep = (ms: number, signal?: AbortSignal) =>
-  new Promise<void>((resolve, reject) => {
-    const t = setTimeout(resolve, ms);
-    signal?.addEventListener("abort", () => (clearTimeout(t), reject(signal.reason)), { once: true });
-  });
-
 export async function* openRouterChat(req: OpenRouterRequest): AsyncGenerator<ChatChunk> {
+  // Free models are often rate-limited upstream: retry before any output was streamed.
   const delays = req.retryDelaysMs ?? [1500, 4000, 8000];
-  let res: Response;
-  for (let attempt = 0; ; attempt++) {
-    res = await send(req);
-    if (res.ok || !RETRY_STATUS.has(res.status) || attempt >= delays.length) break;
-    await res.body?.cancel();
-    await sleep(delays[attempt], req.signal);
-  }
+  const res = await sendWithRetry(() => send(req), delays, req.signal);
   if (!res.ok || !res.body) {
     const err = await errorFrom(res, "OpenRouter");
     if (res.status === 429) {

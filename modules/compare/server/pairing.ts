@@ -110,3 +110,36 @@ export function pairUp(docs: DocRecord[], cases: TestCaseRecord[], opts: { perCa
   pairs.sort((a, b) => b.similarity - a.similarity);
   return { pairs, orphanCases, uncoveredDocs: docs.filter((_, i) => !covered.has(i)).map((d) => d.id) };
 }
+
+export interface Candidate { caseId: string; similarity: number }
+
+/**
+ * Candidate cases for each requirement, best first, at most `k`. A short requirement is compared with the whole
+ * case and with each step separately (it usually matches one step, not a long case); then cases paired with the
+ * requirement's document fill the free places, since docs and cases often word the same thing differently.
+ * An empty list means nothing in the cases looks related: the requirement is uncovered without a model call.
+ */
+export function coverageCandidates(reqs: { docId: string; text: string; section?: string }[], cases: TestCaseRecord[],
+  pairs: Pair[], k = 5): Candidate[][] {
+  const chunks: { text: string; ci: number }[] = [];
+  cases.forEach((c, ci) => {
+    chunks.push({ text: caseText(c), ci });
+    for (const s of c.steps) chunks.push({ text: `${c.title}\n${s.action}\n${s.expected}`, ci });
+  });
+  const top = similar(reqs.map((r) => `${r.section ?? ""}\n${r.text}`), chunks.map((x) => x.text), k * 4, 0.08);
+  const byDoc = new Map<string, Pair[]>();
+  for (const p of pairs) byDoc.set(p.docId, [...(byDoc.get(p.docId) ?? []), p]);
+  return reqs.map((r, i) => {
+    const best = new Map<string, number>();
+    for (const t of top[i]) {
+      const id = cases[chunks[t.target].ci].id;
+      best.set(id, Math.max(best.get(id) ?? 0, t.similarity));
+    }
+    const out = [...best].sort((a, b) => b[1] - a[1]).slice(0, k).map(([caseId, similarity]) => ({ caseId, similarity }));
+    for (const p of (byDoc.get(r.docId) ?? []).sort((a, b) => b.similarity - a.similarity)) {
+      if (out.length >= k) break;
+      if (!out.some((x) => x.caseId === p.caseId)) out.push({ caseId: p.caseId, similarity: 0 });
+    }
+    return out;
+  });
+}

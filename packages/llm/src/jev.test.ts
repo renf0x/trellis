@@ -49,3 +49,45 @@ test("jevDecide explains 402 and rejects a missing answer", async () => {
   const partial = (async () => Response.json({ ...LIVE, answers: { related: LIVE.answers.related } })) as typeof fetch;
   await assert.rejects(jevDecide({ apiKey: "k", model: "m", state: "s", questions, fetch: partial }), /consistency/);
 });
+
+const CLOUDFLARE = '<!DOCTYPE html>\n<!--[if lt IE 7]> <html class="no-js ie6 oldie" lang="en-US"> <![endif]-->\n' +
+  "<html><head><title>Attention Required! | Cloudflare</title></head><body>blocked</body></html>";
+
+test("jevDecide retries a Cloudflare page and a 429, then answers", async () => {
+  let calls = 0;
+  const flaky = (async () => {
+    calls++;
+    if (calls === 1) return new Response(CLOUDFLARE, { status: 403, headers: { "Content-Type": "text/html" } });
+    if (calls === 2) return new Response("{}", { status: 429 });
+    return new Response(JSON.stringify(LIVE), { status: 200 });
+  }) as typeof fetch;
+  const r = await jevDecide({ apiKey: "k", model: "m", state: {}, questions, fetch: flaky, retryDelaysMs: [1, 1, 1] });
+  assert.equal(calls, 3);
+  assert.equal(r.answers.related.type, "noul");
+});
+
+test("jevDecide shows a short message instead of the Cloudflare page; a JSON 403 is not retried", async () => {
+  let calls = 0;
+  const blocked = (async () => (calls++, new Response(CLOUDFLARE, { status: 403 }))) as typeof fetch;
+  await assert.rejects(jevDecide({ apiKey: "k", model: "m", state: {}, questions, fetch: blocked, retryDelaysMs: [1, 1] }), (e: Error) => {
+    assert.match(e.message, /^Jev: 403, вместо ответа пришла страница Cloudflare \(«Attention Required! \| Cloudflare»\)/);
+    assert.doesNotMatch(e.message, /<html|DOCTYPE/);
+    return true;
+  });
+  assert.equal(calls, 3);
+
+  calls = 0;
+  const denied = (async () => (calls++, new Response(JSON.stringify({ error: { message: "key disabled" } }), { status: 403 }))) as typeof fetch;
+  await assert.rejects(jevDecide({ apiKey: "k", model: "m", state: {}, questions, fetch: denied, retryDelaysMs: [1, 1] }), /Jev: 403 key disabled/);
+  assert.equal(calls, 1);
+});
+
+test("jevDecide retries a dropped connection", async () => {
+  let calls = 0;
+  const drop = (async () => {
+    if (++calls === 1) throw new TypeError("fetch failed");
+    return new Response(JSON.stringify(LIVE), { status: 200 });
+  }) as typeof fetch;
+  await jevDecide({ apiKey: "k", model: "m", state: {}, questions, fetch: drop, retryDelaysMs: [1] });
+  assert.equal(calls, 2);
+});

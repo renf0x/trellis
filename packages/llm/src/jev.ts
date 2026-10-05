@@ -1,6 +1,6 @@
 // Jev (TypeSafe) decision model through OpenRouter's alpha Decisions API. It returns probabilities, never text.
 import type { DecisionAnswer, DecisionQuestion, DecisionResult } from "@trellis/core";
-import { errorFrom, LlmError } from "./sse.ts";
+import { errorFrom, LlmError, sendWithRetry } from "./sse.ts";
 
 export const DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions";
 export const JEV_DEFAULT_MODEL = "~typesafe/jev-latest";
@@ -12,6 +12,8 @@ export interface DecideRequest {
   questions: Record<string, DecisionQuestion>;
   signal?: AbortSignal;
   fetch?: typeof fetch;
+  /** Pauses between retries on 429/5xx and Cloudflare pages; [] disables retries. */
+  retryDelaysMs?: number[];
 }
 
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
@@ -33,12 +35,13 @@ function answer(raw: any): DecisionAnswer {
 }
 
 export async function jevDecide(req: DecideRequest): Promise<DecisionResult> {
-  const res = await (req.fetch ?? fetch)(DECISIONS_URL, {
+  // Analysis runs several Jev calls in parallel; bursts sometimes meet a Cloudflare page or a 429.
+  const res = await sendWithRetry(() => (req.fetch ?? fetch)(DECISIONS_URL, {
     method: "POST",
     headers: { Authorization: `Bearer ${req.apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({ model: req.model, state: req.state, questions: req.questions }),
     signal: req.signal,
-  });
+  }), req.retryDelaysMs ?? [2000, 5000, 12000], req.signal);
   if (!res.ok) {
     const err = await errorFrom(res, "Jev");
     if (res.status === 402) err.message = "Jev: 402, на балансе OpenRouter не хватает средств.";

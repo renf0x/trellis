@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { HttpError, type DocRecord, type ServerModuleContext, type TestCaseRecord } from "@trellis/core";
 import { caseForModel, docForModel, judgeWithChat, judgeWithJev, type PairVerdict } from "./engines.ts";
-import { pairUp, similar } from "./pairing.ts";
+import { coverageCandidates, pairUp, type Candidate } from "./pairing.ts";
 import { extractRequirements, judgeCoverage, judgeQuality, type Coverage, type CoverageVerdict, type Criterion, type QualityVerdict } from "./stages.ts";
 
 type Engine = "chat" | "jev";
@@ -29,8 +29,12 @@ interface Requirement {
   id: string;
   docId: string;
   text: string;
+  /** Heading and lead-in line the requirement sits under. */
+  section?: string;
   /** "unchecked": over the run limit. */
   status: Coverage | "unchecked" | "error";
+  /** "no-candidates": no case looked related, so no model checked it. */
+  reason?: "no-candidates";
   caseId?: string;
   similarity?: number;
   verdict?: CoverageVerdict;
@@ -211,16 +215,18 @@ export function register(ctx: ServerModuleContext) {
     // Quality: one call per document.
     const qualityDocs = stages.includes("quality") ? ordered.slice(0, limit) : [];
 
-    // Coverage: requirements from the text, candidate cases by similarity; with no candidate it is uncovered for free.
+    // Coverage: requirements from the text, candidate cases by similarity of steps and by the document's pairs;
+    // with no candidate at all it is uncovered for free, and the item says no model checked it.
     const requirements: Requirement[] = [];
-    const candidates = new Map<string, { caseId: string; similarity: number }[]>();
+    const candidates = new Map<string, Candidate[]>();
     if (stages.includes("coverage")) {
-      for (const d of ordered) for (const text of extractRequirements(d)) requirements.push({ id: hash("req", d.id, text), docId: d.id, text, status: "unchecked" });
-      const top = similar(requirements.map((r) => r.text), cases.map((c) => `${c.title}\n${c.steps.map((s) => `${s.action}\n${s.expected}`).join("\n")}`), 3, 0.12);
+      for (const d of ordered) {
+        for (const x of extractRequirements(d)) requirements.push({ id: hash("req", d.id, x.text), docId: d.id, ...x, status: "unchecked" });
+      }
+      const top = coverageCandidates(requirements, cases, p.pairs);
       requirements.forEach((r, i) => {
-        const list = top[i].map((t) => ({ caseId: cases[t.target].id, similarity: t.similarity }));
-        if (!list.length) r.status = "not_covered";
-        else candidates.set(r.id, list);
+        if (top[i].length) candidates.set(r.id, top[i]);
+        else Object.assign(r, { status: "not_covered", reason: "no-candidates" });
       });
     }
     const toJudge = requirements.filter((r) => candidates.has(r.id)).slice(0, limit);
@@ -279,8 +285,9 @@ export function register(ctx: ServerModuleContext) {
           const d = docById.get(r.docId)!;
           const cs = list.map((x) => caseById.get(x.caseId)!).filter(Boolean);
           try {
-            const v = await cached(hash("coverage", engine, r.text, d.title, ...cs.map(caseForModel)),
-              () => judgeCoverage(ctx.llm, r.text, d, cs, { engine, signal }));
+            const chatToo = engine === "jev" && explain && !!chat;
+            const v = await cached(hash("coverage", engine, String(chatToo), String(threshold), r.text, r.section ?? "", d.title, ...cs.map(caseForModel)),
+              () => judgeCoverage(ctx.llm, r.text, d, cs, { engine, section: r.section, chat: chatToo, threshold, signal }));
             r.status = v.status;
             r.verdict = v;
             r.caseId = v.caseId;
@@ -470,7 +477,9 @@ export function register(ctx: ServerModuleContext) {
     const label: Record<Requirement["status"], string> = {
       covered: "покрыто", partial: "покрыто частично", not_covered: "не покрыто", unchecked: "не проверено", error: "ошибка проверки",
     };
-    const lines = [`Требование из документации: «${r.text}»`, `Покрытие тест-кейсами: ${label[r.status]}.`];
+    const lines = [`Требование из документации: «${r.text}»`];
+    if (r.section) lines.push(`Раздел: ${r.section}`);
+    lines.push(`Покрытие тест-кейсами: ${label[r.status]}${r.reason === "no-candidates" ? " (похожих кейсов не нашлось, модель не проверяла)" : ""}.`);
     if (r.verdict?.comment) lines.push(`Комментарий: ${r.verdict.comment}`);
     if (d) lines.push("", `## Документация (id: ${d.id})`, docForModel(d));
     if (c) lines.push("", `## Ближайший тест-кейс (id: ${c.id})`, caseForModel(c));

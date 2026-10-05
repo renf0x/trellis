@@ -14,7 +14,7 @@ interface Summary {
 }
 type ReqStatus = "covered" | "partial" | "not_covered" | "unchecked" | "error";
 interface Requirement {
-  id: string; docId: string; text: string; status: ReqStatus; similarity?: number; error?: string;
+  id: string; docId: string; text: string; section?: string; status: ReqStatus; reason?: "no-candidates"; similarity?: number; error?: string;
   verdict?: { confidence: number; comment?: string; engine: string };
   doc?: DocRef; case?: CaseRef;
 }
@@ -40,6 +40,7 @@ const REQ: Record<ReqStatus, { label: string; tone: string }> = {
   unchecked: { label: "Не проверено", tone: "text-faint" },
   error: { label: "Ошибка", tone: "text-bad" },
 };
+const ENGINE: Record<string, string> = { jev: "Jev", chat: "модель чата", "jev+chat": "Jev + модель чата" };
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 const tone = (x: number) => (x >= 0.7 ? "bg-ok" : x >= 0.4 ? "bg-warn" : "bg-bad");
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString("ru-RU", { dateStyle: "short", timeStyle: "short" }) : "");
@@ -102,10 +103,13 @@ export function CoverageTab({ api, past, onError, onToast, navigate }: {
             <span className="text-ok">покрыто {s.covered}</span>
             <span className="text-warn">частично {s.partial}</span>
             <span className="text-bad">не покрыто {s.notCovered}</span>
-            {s.unchecked > 0 && <span title="Не уложились в лимит проверок: запустите анализ ещё раз или поднимите лимит">не проверено {s.unchecked}</span>}
+            {s.unchecked > 0 && <span title="Не уложились в лимит проверок: запустите анализ ещё раз или поднимите «Проверок на этап»">не проверено {s.unchecked}</span>}
+            {s.errors > 0 && <span className="text-bad">ошибок {s.errors}</span>}
           </div>
           <p className="mt-2 text-[11px] text-faint">
-            Процент — от проверенных требований. Требования выделены из текста автоматически; без похожего кейса требование сразу считается непокрытым. {when(data.at)}
+            Процент — от проверенных требований. Требования выделены из текста автоматически. Модель получает требование
+            и до 5 кейсов-кандидатов: похожие по шагам и связанные с этим документом. Если кандидатов нет, требование
+            считается непокрытым без проверки моделью. {when(data.at)}
           </p>
         </div>
         <div className="min-h-0 flex-1 overflow-auto">
@@ -117,7 +121,7 @@ export function CoverageTab({ api, past, onError, onToast, navigate }: {
       </section>
       <section className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-panel">
         <div className="flex flex-wrap gap-1.5 border-b border-line p-3">
-          {(["not_covered", "partial", "covered", "unchecked", ""] as const).map((k) => (
+          {(["not_covered", "partial", "covered", "unchecked", "error", ""] as const).map((k) => (
             <button key={k} onClick={() => setStatus(k)}
               className={`h-8 rounded-lg border px-2.5 text-xs ${status === k ? "border-accent bg-accent-soft" : "border-line text-dim hover:text-ink"}`}>
               {k ? REQ[k].label : "Все"}
@@ -132,9 +136,11 @@ export function CoverageTab({ api, past, onError, onToast, navigate }: {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2 text-xs">
                     <span className={REQ[r.status].tone}>{REQ[r.status].label}</span>
-                    {r.verdict && <span className="text-faint">{r.verdict.engine === "jev" ? "Jev" : "модель чата"} · {pct(r.verdict.confidence)}</span>}
+                    {r.verdict && <span className="text-faint">{ENGINE[r.verdict.engine] ?? r.verdict.engine} · {pct(r.verdict.confidence)}</span>}
+                    {r.reason === "no-candidates" && <span className="text-faint">похожих кейсов не найдено, модель не проверяла</span>}
                     {!docId && r.doc && <span className="truncate text-faint">{r.doc.title}</span>}
                   </div>
+                  {r.section && <div className="mt-1 truncate text-xs text-faint">{r.section}</div>}
                   <div className="mt-1 text-sm">{r.text}</div>
                   {r.case && (
                     <div className="mt-1 text-xs text-dim">

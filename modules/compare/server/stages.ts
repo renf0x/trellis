@@ -26,7 +26,7 @@ export interface CoverageVerdict {
   caseId?: string;
   confidence: number;
   comment?: string;
-  engine: "chat" | "jev";
+  engine: "chat" | "jev" | "jev+chat";
   models: string[];
   costUsd: number;
 }
@@ -44,15 +44,25 @@ const jsonOf = (text: string) => {
 /** Wording that usually marks a requirement, in Russian and English. */
 const MARKER = /(должн|необходим|требуе|обязательн|нельзя|запрещ|разреш|допуска|не может|не более|не менее|не позднее|не ранее|только|если |в случае|при (?:вводе|нажатии|ошибке|попытке|успешн)|отобража|блокир|must|shall|should|required|only |cannot|not allowed|at least|at most|maximum|minimum)/i;
 
+export interface ExtractedRequirement {
+  text: string;
+  /** The nearest heading and lead-in line («Поля формы:»): a list item often makes sense only with them. */
+  section?: string;
+}
+
 /**
  * Pulls checkable statements out of a document without a model: list items, table rows and sentences
- * with requirement wording. Code, headings and log-like lines are skipped. At most `max` per document.
+ * with requirement wording. Code, headings, lead-in lines ending with ":" and log-like lines are skipped.
+ * At most `max` per document.
  */
-export function extractRequirements(d: DocRecord, max = 40): string[] {
-  const out: string[] = [];
+export function extractRequirements(d: DocRecord, max = 40): ExtractedRequirement[] {
+  const out: ExtractedRequirement[] = [];
   const seen = new Set<string>();
+  const clean = (raw: string) => raw.replace(/[*_`]+/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/\s+/g, " ").trim();
+  let heading = "";
+  let lead = "";
   const push = (raw: string, strong: boolean) => {
-    const t = raw.replace(/[*_`]+/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/\s+/g, " ").trim();
+    const t = clean(raw);
     if (t.length < 15 || t.length > 400) return;
     const letters = (t.match(/\p{L}/gu) ?? []).length;
     if (letters / t.length < 0.6) return; // stack traces, ids, numbers
@@ -60,18 +70,33 @@ export function extractRequirements(d: DocRecord, max = 40): string[] {
     const key = t.toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);
-    out.push(t);
+    const section = [heading, lead].filter(Boolean).join(" › ").slice(0, 300);
+    out.push(section ? { text: t, section } : { text: t });
   };
   let code = false;
   for (const line of d.content.split("\n")) {
     if (/^\s*(```|~~~)/.test(line)) code = !code;
-    if (code || /^\s*#/.test(line) || /^\s*\|?\s*:?-{3,}/.test(line)) continue;
-    const item = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/.exec(line);
+    if (code || /^\s*\|?\s*:?-{3,}/.test(line)) continue;
+    const h = /^\s*#+\s*(.*)$/.exec(line);
+    if (h) {
+      heading = clean(h[1]);
+      lead = "";
+      continue;
+    }
+    const item = /^\s*(?:[-*+•▪·–—]|\d+[.)])\s+(.*)$/.exec(line);
+    const text = item ? item[1] : line;
+    if (/:\s*$/.test(text)) {
+      lead = clean(text).replace(/:$/, "");
+      continue;
+    }
     if (item) push(item[1], true);
     else if (/^\s*\|.*\|\s*$/.test(line)) {
       const cells = line.split("|").map((c) => c.trim()).filter(Boolean);
       if (cells.length >= 2) push(cells.join(" — "), false);
-    } else for (const s of line.split(/(?<=[.!?])\s+/)) push(s, false);
+    } else if (line.trim()) {
+      lead = "";
+      for (const s of line.split(/(?<=[.!?])\s+/)) push(s, false);
+    }
     if (out.length >= max) break;
   }
   return out.slice(0, max);
@@ -177,15 +202,19 @@ const COVERAGE_SYSTEM =
 
 const STATUSES: Coverage[] = ["covered", "partial", "not_covered"];
 
+/**
+ * Jev picks covered/partial/not_covered and the best candidate. With `chat`, the chat model decides instead
+ * when Jev is below `threshold` and writes what is missing for a partial cover.
+ */
 export async function judgeCoverage(llm: ModuleLlm, requirement: string, d: DocRecord, candidates: TestCaseRecord[],
-  opts: { engine: "chat" | "jev"; signal?: AbortSignal }): Promise<CoverageVerdict> {
+  opts: { engine: "chat" | "jev"; section?: string; chat?: boolean; threshold?: number; signal?: AbortSignal }): Promise<CoverageVerdict> {
   const named = Object.fromEntries(candidates.map((c, i) => [`case_${i + 1}`, caseShort(c)]));
   const caseOf = (key: unknown) => {
     const i = /^case_(\d+)$/.exec(String(key));
     return i ? candidates[Number(i[1]) - 1]?.id : undefined;
   };
   if (opts.engine === "chat") {
-    const text = `## Требование (документ «${d.title}»)\n${requirement}\n\n` +
+    const text = `## Требование (документ «${d.title}»${opts.section ? `, раздел «${opts.section}»` : ""})\n${requirement}\n\n` +
       Object.entries(named).map(([k, t]) => `## ${k}\n${t}`).join("\n\n");
     const r = await llm.complete([{ role: "system", content: COVERAGE_SYSTEM }, { role: "user", content: text }], { signal: opts.signal });
     const j = jsonOf(r.text);
@@ -196,13 +225,20 @@ export async function judgeCoverage(llm: ModuleLlm, requirement: string, d: DocR
       comment: typeof j.comment === "string" ? j.comment : undefined, engine: "chat", models: [r.usage?.model ?? r.model], costUsd: cost(r.usage),
     };
   }
-  const r = await llm.decide({ requirement, document: d.title, candidate_test_cases: named }, coverageQuestions(candidates.length), { signal: opts.signal });
+  const state = { requirement, document: d.title, ...(opts.section ? { section: opts.section } : {}), candidate_test_cases: named };
+  const r = await llm.decide(state, coverageQuestions(candidates.length), { signal: opts.signal });
   const cov = r.answers.coverage;
   const pick = r.answers.case;
   if (cov?.type !== "choice" || pick?.type !== "choice") throw new Error("Jev вернул ответы не того типа");
   const status = STATUSES.includes(cov.choice as Coverage) ? (cov.choice as Coverage) : "not_covered";
-  return {
+  const base: CoverageVerdict = {
     status, caseId: status === "not_covered" ? undefined : caseOf(pick.choice), confidence: cov.confidence,
     engine: "jev", models: [r.model], costUsd: r.usage.costUsd,
   };
+  const unsure = cov.confidence < (opts.threshold ?? 0);
+  if (!opts.chat || (!unsure && status !== "partial")) return base;
+  // When Jev was unsure the chat model's verdict wins; otherwise it only says what is missing.
+  const v = await judgeCoverage(llm, requirement, d, candidates, { ...opts, engine: "chat" });
+  const both = { engine: "jev+chat" as const, models: [r.model, ...v.models], costUsd: base.costUsd + v.costUsd };
+  return unsure ? { ...v, ...both } : { ...base, comment: v.comment, ...both };
 }

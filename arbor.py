@@ -1636,7 +1636,11 @@ def cmd_session_snapshot(args: argparse.Namespace) -> int:
     try:
         event = _read_hook_event()
         _log_hook_event(event)
-        if _write_auto_snapshot(event.get("transcript_path") or args.transcript):
+        transcript = event.get("transcript_path") or args.transcript
+        session = re.sub(r"[^A-Za-z0-9_\-]", "", getattr(args, "session", None) or "")
+        if not transcript and session:  # the mod knows the session id, not the transcript path
+            transcript = str(_claude_projects_dir(Path.cwd().resolve()) / f"{session}.jsonl")
+        if _write_auto_snapshot(transcript):
             print(f"# auto snapshot written to {SESSION_STATE_PATH}")
     except Exception:  # a hook must never break the agent loop
         pass
@@ -1668,6 +1672,9 @@ def cmd_session_compaction(args: argparse.Namespace) -> int:
     real transcripts, auto-compaction at a fixed ~200k window cost 0.85x of what was
     recorded, while starting over or compacting late cost more. `--mode` is accepted for
     old scripts and ignored."""
+    if getattr(args, "json", False):
+        print(json.dumps(compaction_window(_project_root(args.path)), indent=2))
+        return 0
     if args.mode not in (None, "off"):
         print(f"# --mode {args.mode} is ignored: Arbor no longer blocks compaction")
     print(f"# compaction: allowed. Claude Code: run `/autocompact {COMPACT_WINDOW_HINT}` once "
@@ -1677,10 +1684,69 @@ def cmd_session_compaction(args: argparse.Namespace) -> int:
     return 0
 
 
+def compaction_window(root: Path) -> dict:
+    """The window to compact at: the replay of this project's own long sessions when there
+    are any (`stats --simulate-compact`), else the measured default. Read by the mod."""
+    hint = _parse_window(COMPACT_WINDOW_HINT)
+    suggested, count = None, 0
+    try:
+        directory = _claude_projects_dir(root)
+        sessions = _long_sessions(directory) if directory.is_dir() else []
+        count = len(sessions)
+        if sessions:
+            windows = [_parse_window(w) for w in SIM_WINDOWS.split(",")]
+            sim = _simulate_report(directory, windows, _stored_prices(root), sessions)
+            totals = {str(w): sum(r["windows"][str(w)]["cost"] for r in sim["sessions"]) for w in windows}
+            suggested = _suggest_window(totals, windows)
+    except (OSError, ValueError, KeyError):
+        suggested = None
+    return {"hint": hint, "suggested": suggested, "sessions": count, "window": suggested or hint}
+
+
 def cmd_session_compact_guard(args: argparse.Namespace) -> int:
     """Retired PreCompact hook: it used to block compaction. Kept as a no-op so settings
     written by v0.5 still parse (an unknown subcommand would exit 2, and exit 2 from a
     PreCompact hook blocks the compaction); `init` removes the hook."""
+    return 0
+
+
+TURNS_PATH = Path(".arbor") / "turns.jsonl"
+_TURN_INTS = ("input", "output", "cache_read", "cache_write", "ms", "context")
+
+
+def turn_record(raw: dict) -> dict:
+    """One turn as Claude Code measured it, reduced to numbers and ids: no prompt, no answer."""
+    record = {"t": datetime.datetime.now().isoformat(timespec="seconds"),
+              "session": re.sub(r"[^A-Za-z0-9_\-]", "", str(raw.get("session") or ""))[:64],
+              "agent": bool(raw.get("agent")),
+              "model": re.sub(r"[^A-Za-z0-9_.\-\[\]]", "", str(raw.get("model") or ""))[:60]}
+    for key in _TURN_INTS:
+        try:
+            record[key] = max(0, int(raw.get(key) or 0))
+        except (TypeError, ValueError):
+            record[key] = 0
+    try:
+        usd = float(raw["usd_total"])
+        if usd >= 0:
+            record["usd_total"] = round(usd, 6)
+    except (KeyError, TypeError, ValueError):
+        pass
+    return record
+
+
+def cmd_session_record_turn(args: argparse.Namespace) -> int:
+    root = _project_root(args.path)
+    try:
+        raw = json.loads(sys.stdin.read() or "{}")
+    except ValueError:
+        sys.stderr.write("[arbor] record-turn: stdin is not JSON\n")
+        return 2
+    if not isinstance(raw, dict):
+        return 2
+    path = root / TURNS_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(turn_record(raw), ensure_ascii=False) + "\n")
     return 0
 
 
@@ -4018,9 +4084,72 @@ def jev_status(root: Path) -> dict:
             "threshold": config["threshold"], "top": config["top"]}
 
 
+def jev_entries_payload(root: Path, chars: int | None = None) -> dict:
+    """The notes a hook may pick from, for a model the caller runs itself (the Claude Code
+    mod asks Haiku): ids as `jev_match` numbers them, bodies cut, and the spend gate."""
+    config = _jev_config(root)
+    limit = int(chars or config["body_chars"])
+    entries = [{"id": f"n{i}", "file": e["file"], "title": e["title"],
+                "body": e["body"] if len(e["body"]) <= limit else e["body"][:limit].rstrip() + " ..."}
+               for i, e in enumerate(_jev_entries(root / "memory"))]
+    return {"config": {"enabled": bool(config["enabled"]), "spent_today": round(_jev_spent_today(root), 6),
+                       "daily_cap_usd": float(config["daily_cap_usd"]), "top": int(config["top"]),
+                       "threshold": float(config["threshold"]), "body_chars": int(config["body_chars"])},
+            "entries": entries}
+
+
+def jev_log_external(root: Path, raw: dict) -> dict:
+    """Log a Jev call another process made (the mod), kept to the fields the UI reads:
+    counts, cost, latency, picked titles. A prompt or question is never stored."""
+    source = re.sub(r"[^a-z0-9\-]", "", str(raw.get("source") or "claude").lower())[:12] or "claude"
+    kind = "code" if raw.get("kind") == "code" else "memory"
+    record = _jev_record("mod-" + source, kind)
+    for key in ("entries", "questions", "requests"):
+        try:
+            record[key] = max(0, int(raw.get(key) or 0))
+        except (TypeError, ValueError):
+            pass
+    for key, digits in (("cost", 6), ("latency_s", 2)):
+        try:
+            record[key] = round(max(0.0, float(raw.get(key) or 0)), digits)
+        except (TypeError, ValueError):
+            pass
+    injected = raw.get("injected")
+    if isinstance(injected, list):
+        record["injected"] = [str(x)[:70] for x in injected[:4] if isinstance(x, str)]
+    top = raw.get("top")
+    if isinstance(top, list):
+        rows = []
+        for item in top[:4]:
+            if isinstance(item, dict):
+                try:
+                    rows.append({"title": str(item.get("title") or "")[:70], "p": round(float(item.get("p") or 0), 3)})
+                except (TypeError, ValueError):
+                    pass
+        record["top"] = rows
+    if raw.get("model"):
+        record["model"] = re.sub(r"[^A-Za-z0-9_.\-\[\]]", "", str(raw["model"]))[:60]
+    if raw.get("error"):
+        record["error"] = _KEY_SHAPED_RE.sub("sk-or-…", str(raw["error"]))[:80]
+    _jev_log(root, record)
+    return record
+
+
 def cmd_jev(args: argparse.Namespace) -> int:
     root = _project_root(args.path)
     action = args.jev_cmd
+    if action == "entries":
+        print(json.dumps(jev_entries_payload(root, args.chars), ensure_ascii=False))
+        return 0
+    if action == "log":
+        try:
+            raw = json.loads(sys.stdin.read() or "{}")
+        except ValueError:
+            return 2
+        if not isinstance(raw, dict):
+            return 2
+        jev_log_external(root, raw)
+        return 0
     if action == "key":
         if args.clear:
             jev_key_clear()
@@ -4372,6 +4501,49 @@ def _ui_jev_call(record: dict) -> dict | None:
     }
 
 
+def _ui_measured(root: Path) -> dict | None:
+    """Turns Claude Code itself measured (the mod writes .arbor/turns.jsonl): exact tokens
+    and the session cost it reports. Cost is cumulative per session, so it adds up by
+    deltas; a smaller value starts a new run of the same session (a resume)."""
+    path = root / TURNS_PATH
+    if not path.is_file():
+        return None
+    tokens = {key: 0 for key in ("input", "output", "cache_read", "cache_write")}
+    last: dict[str, float] = {}
+    days: dict[str, float] = {}
+    turns, usd, first, latest = 0, 0.0, "", ""
+    for line in read_text(path).splitlines():
+        try:
+            record = json.loads(line)
+            day = _valid_date(str(record["t"])[:10])
+        except (ValueError, TypeError, KeyError, AttributeError):
+            continue
+        if not day or not isinstance(record, dict):
+            continue
+        turns += 1
+        first, latest = first or day, day
+        for key in tokens:
+            try:
+                tokens[key] += max(0, int(record.get(key) or 0))
+            except (TypeError, ValueError):
+                pass
+        sid = str(record.get("session") or "")
+        try:
+            total = float(record["usd_total"])
+        except (KeyError, TypeError, ValueError):
+            last.setdefault(sid, 0.0)
+            continue
+        before = last.get(sid, 0.0)
+        delta = total - before if total >= before else total
+        last[sid] = total
+        usd += delta
+        days[day] = days.get(day, 0.0) + delta
+    if not turns:
+        return None
+    return {"turns": turns, "sessions": len(last), "usd": usd, "tokens": tokens,
+            "days": [{"date": d, "usd": days[d]} for d in sorted(days)], "first": first, "last": latest}
+
+
 def _ui_jev_log(root: Path) -> dict | None:
     """Every Jev call this project logged: totals, per source, per day, latency, the notes
     picked most and the latest calls. The log holds no prompt and no key; error texts are
@@ -4518,6 +4690,7 @@ def _ui_collect(root: Path, title: str, lang: str) -> dict:
         "usage": usage, "prices": prices,
         "savings": _ui_savings(_long_sessions(Path(usage["dir"])), prices) if usage else None,
         "jev_log": _ui_jev_log(root), "hooks": _ui_hooks(root), "state": _ui_state(root),
+        "measured": _ui_measured(root),
         "settings": {"limits": _context_limits(argparse.Namespace(), root), "window": COMPACT_WINDOW_HINT,
                      "jev": {k: jev[k] for k in ("model", "threshold", "top", "daily_cap_usd", "timeout")}},
         "version": __version__,
@@ -4587,6 +4760,7 @@ UI_TEXT = {
         "share_cost_h": "Из чего состоит стоимость", "of_cost": "{p} стоимости", "of_tokens": "{p} токенов",
         "k_per_day": "в среднем за день с работой", "k_per_turn": "в среднем за ход",
         "k_top_day": "самый дорогой день — {date}", "k_days": "{days} с работой",
+        "k_measured": "по счётчику Claude Code (мод arbor)", "k_measured_sub": "{turns} · {sessions}",
         "k_turns": "{turns} агента", "k_sub": "+{n} у субагентов",
         "daily_h": "Траты по дням", "daily_unit": "{u} в день, по видам токенов",
         "col_session": "Сессия", "col_dates": "Даты", "col_turns": "Ходы", "col_peak": "Пик контекста",
@@ -4780,6 +4954,7 @@ UI_TEXT = {
         "share_cost_h": "What the cost is made of", "of_cost": "{p} of cost", "of_tokens": "{p} of tokens",
         "k_per_day": "average per working day", "k_per_turn": "average per turn",
         "k_top_day": "costliest day — {date}", "k_days": "{days} with work",
+        "k_measured": "measured by Claude Code (arbor mod)", "k_measured_sub": "{turns} · {sessions}",
         "k_turns": "agent {turns}", "k_sub": "+{n} by subagents",
         "daily_h": "Spending by day", "daily_unit": "{u} per day, by token class",
         "col_session": "Session", "col_dates": "Dates", "col_turns": "Turns", "col_peak": "Peak context",
@@ -5423,6 +5598,15 @@ def _tokens_section(data: dict, t: dict, lang: str) -> str:
             _usd_axis if prices else (lambda v: _short_num(v, lang)), t, lang,
             extra=lambda d: _count(d["turns"], t["plural"]["turn"], lang))
         daily += f'<div class="part">{chart}</div>'
+
+    measured = data.get("measured")
+    if measured:
+        measured_tokens = sum(measured["tokens"].values())
+        daily += _kpis([
+            (_usd(measured["usd"]) if measured["usd"] else _tokens_text(measured_tokens, lang),
+             t["k_measured"],
+             t["k_measured_sub"].format(turns=_count(measured["turns"], t["plural"]["turn"], lang),
+                                        sessions=_count(measured["sessions"], t["plural"]["session"], lang)))])
 
     priced = sorted(((s, _usage_units(s, prices)["total"]) for s in sessions),
                     key=lambda pair: (-pair[1], pair[0]["id"]))
@@ -6868,6 +7052,11 @@ def main(argv: list[str] | None = None) -> int:
     j_ask.add_argument("--dir", help="with --code: only files under this path prefix")
     j_ask.add_argument("--json", action="store_true")
     jev_sub.add_parser("hook", help="UserPromptSubmit hook (installed by `jev on`)")
+    j_entries = jev_sub.add_parser(
+        "entries", help="the notes Jev picks from, as JSON, for a model run elsewhere (the Claude Code mod)")
+    j_entries.add_argument("--chars", type=int, help="cut each body to this many characters")
+    j_entries.add_argument("--json", action="store_true", help="accepted; the output is always JSON")
+    jev_sub.add_parser("log", help="log a Jev call made elsewhere (JSON on stdin); never a prompt")
     for j_parser in jev_sub.choices.values():
         j_parser.add_argument("--path", default=".")
     jev.set_defaults(fn=cmd_jev)
@@ -6891,6 +7080,7 @@ def main(argv: list[str] | None = None) -> int:
         help="PreCompact hook: deterministic transcript extract into the state file")
     s_snap.add_argument("--transcript",
                         help="transcript .jsonl (hook JSON on stdin supplies it)")
+    s_snap.add_argument("--session", help="session id: its transcript in this project's Claude Code folder")
     s_snap.set_defaults(fn=cmd_session_snapshot)
 
     s_rest = ses_sub.add_parser(
@@ -6908,7 +7098,16 @@ def main(argv: list[str] | None = None) -> int:
         help="how long sessions shrink: the auto-compact window to set (compaction is never blocked)")
     s_comp.add_argument("--mode", choices=COMPACTION_MODES, help=argparse.SUPPRESS)
     s_comp.add_argument("--path", default=".")
+    s_comp.add_argument("--json", action="store_true",
+                        help="{hint, suggested, sessions, window}: the window from your own sessions")
     s_comp.set_defaults(fn=cmd_session_compaction)
+
+    s_turn = ses_sub.add_parser(
+        "record-turn",
+        help="append one turn's exact usage (JSON on stdin, from the Claude Code mod) to .arbor/turns.jsonl")
+    s_turn.add_argument("--stdin", action="store_true", help="read the record from stdin (the only source)")
+    s_turn.add_argument("--path", default=".")
+    s_turn.set_defaults(fn=cmd_session_record_turn)
 
     s_guard = ses_sub.add_parser(
         "compact-guard",
